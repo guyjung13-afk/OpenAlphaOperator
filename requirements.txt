@@ -1,0 +1,9 @@
+﻿fastapi
+uvicorn[standard]
+redis
+pandas
+numpy
+streamlit
+plotly
+snowflake-connector-python
+temporalio

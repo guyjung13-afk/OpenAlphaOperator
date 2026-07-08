@@ -1,0 +1,39 @@
+﻿version: "3.8"
+
+services:
+  spire-reactor:
+    build: .
+    container_name: openalpha-reactor
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    volumes:
+      - ./spire_reactor:/app/spire_reactor
+      - ./sql:/app/sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: openalpha-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # Uncomment to run dashboard inside Docker
+  # dashboard:
+  #   build: .
+  #   command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+  #   ports:
+  #     - "8501:8501"
+  #   depends_on:
+  #     - spire-reactor
+  #   volumes:
+  #     - .:/app
+
+volumes:
+  redis_data:
