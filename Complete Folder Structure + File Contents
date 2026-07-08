@@ -1,0 +1,30 @@
+sovereign-gas-burn-pci-etrm/
+├── README.md                  # Full onboarding + demo script
+├── .github/workflows/
+│   └── deploy.yml             # CI/CD to Spire/Azure
+├── docker/
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── sql/
+│   ├── 01_base_ingestion_stream.sql
+│   ├── 02_pci_dynamic_table.sql
+│   ├── 03_etrm_fusion_view.sql
+│   └── 04_propagation_task.sql
+├── spire_reactor/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── workflows/
+│   │   └── pci_etrm_ritual.py
+│   ├── activities/
+│   │   └── fusion.py
+│   └── config/
+│       └── snowflake_creds.env.example
+├── scripts/
+│   ├── migrate_consumers.sh
+│   └── test_operator_update.py
+├── docs/
+│   ├── PCI_Pipelines_Integration.md
+│   └── ETRM_Model_Mapping.md
+├── .gitignore
+├── pyproject.toml
+└── LICENSE
