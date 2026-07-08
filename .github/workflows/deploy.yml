@@ -1,0 +1,8 @@
+name: Deploy Sovereign Reactor
+on: [push]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build && docker compose up -d
