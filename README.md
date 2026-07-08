@@ -100,7 +100,7 @@ Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
 
 | Layer | State |
 |-------|--------|
-| Streamlit dashboard | Live demo (session_state); Compose default |
+| Streamlit dashboard | Commercial Truth Cockpit (hybrid v1); Spire rituals + demo envelopes |
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
 | Public feeds ingest | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
