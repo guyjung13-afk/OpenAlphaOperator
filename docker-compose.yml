@@ -1,20 +1,6 @@
-﻿version: "3.8"
+version: "3.8"
 
 services:
-  spire-reactor:
-    build: .
-    container_name: openalpha-reactor
-    ports:
-      - "8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      - redis
-    volumes:
-      - ./spire_reactor:/app/spire_reactor
-      - ./sql:/app/sql
-    restart: unless-stopped
-
   redis:
     image: redis:7-alpine
     container_name: openalpha-redis
@@ -22,18 +8,72 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
-  # Uncomment to run dashboard inside Docker
-  # dashboard:
-  #   build: .
-  #   command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
-  #   ports:
-  #     - "8501:8501"
-  #   depends_on:
-  #     - spire-reactor
-  #   volumes:
-  #     - .:/app
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openalpha-dashboard
+    command: >
+      streamlit run dashboard/app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.headless=true
+      --browser.gatherUsageStats=false
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DEMO_MODE=true
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # python:3.11-slim has no curl; use stdlib against Streamlit health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  spire-reactor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openalpha-spire
+    command: python -m spire_reactor.main --mode worker
+    volumes:
+      - .:/app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DEMO_MODE=true
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["full"] # start with: docker compose --profile full up
 
 volumes:
   redis_data:
