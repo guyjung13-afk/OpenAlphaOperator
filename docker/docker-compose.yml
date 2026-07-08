@@ -1,0 +1,7 @@
+services:
+  reactor:
+    build: .
+    ports: ["8000:8000"]
+    env_file: spire_reactor/config/snowflake_creds.env
+  redis:
+    image: redis:7-alpine
