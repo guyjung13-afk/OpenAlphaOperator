@@ -55,11 +55,26 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update --payload "
 # Redis worker (needs Redis up; pre-Temporal)
 # python -m spire_reactor.main --mode worker
 
+# Public feeds demo (Open-Meteo; optional EIA_API_KEY) → gas burn ritual
+python -m spire_reactor.main --mode ingest
+python -m spire_reactor.main --mode ingest --synthetic   # offline / CI
+python -m spire_reactor.main --mode ingest --no-ritual   # snapshot only
+
 # or Docker stack (redis + dashboard by default)
 docker compose up -d --build
 # include Redis worker (spire-reactor):
 docker compose --profile full up -d --build
 ```
+
+### Public feeds (PoC instead of Snowflake)
+
+`spire_reactor/ingest/public_feeds.py` pulls:
+
+- **Open-Meteo** (no key) — weather → synthetic plant load / burn
+- **EIA** (optional `EIA_API_KEY`) — natural gas price when configured
+- **Synthetic tick** — air-gapped / CI
+
+Maps into the same `gas_burn_update` ritual payload as the operator form. Snowflake stays Phase 2 for system-of-record.
 
 ### Ritual stub (demo)
 
@@ -87,8 +102,9 @@ Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
 |-------|--------|
 | Streamlit dashboard | Live demo (session_state); Compose default |
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
+| Public feeds ingest | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
-| Snowflake SQL | Checked in; apply in Snowsight |
+| Snowflake SQL | Phase 2 system-of-record; apply in Snowsight |
 | Temporal fusion | Scaffold (`workflows/` + `activities/`) |
 
 ## Security

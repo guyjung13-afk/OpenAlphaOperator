@@ -319,6 +319,8 @@ def root() -> dict[str, str]:
         "health": "/health",
         "ritual": "POST /ritual/operator-update",
         "dispatch": "POST /ritual",
+        "ingest_snapshot": "GET /ingest/snapshot",
+        "ingest_ritual": "POST /ingest/demo-ritual",
     }
 
 
@@ -338,6 +340,27 @@ def ritual_dispatch(body: RitualRequest) -> dict[str, Any]:
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
+
+
+@app.get("/ingest/snapshot")
+def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
+    """Pull public feeds (Open-Meteo ± EIA) or offline synthetic tick."""
+    from spire_reactor.ingest.public_feeds import fetch_demo_snapshot, synthetic_tick
+
+    if synthetic:
+        return synthetic_tick()
+    return fetch_demo_snapshot()
+
+
+@app.post("/ingest/demo-ritual")
+def ingest_demo_ritual(synthetic: bool = False) -> dict[str, Any]:
+    """Fetch public/synthetic feeds and run gas_burn_update ritual."""
+    from spire_reactor.ingest.public_feeds import fetch_demo_snapshot, synthetic_tick
+
+    snap = synthetic_tick() if synthetic else fetch_demo_snapshot()
+    payload = snap.get("operator_payload") or {}
+    result = trigger_ritual("gas_burn_update", payload)
+    return {"snapshot": snap, "ritual": result}
 
 
 # ── Redis worker (pre-Temporal) ──────────────────────────────────────
@@ -388,9 +411,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Spire Reactor — PCI + ETRM")
     parser.add_argument(
         "--mode",
-        choices=["api", "worker", "trigger"],
+        choices=["api", "worker", "trigger", "ingest"],
         default=os.getenv("SPIRE_MODE", "api"),
-        help="api (default, Docker), worker (Redis), trigger (one-shot)",
+        help="api | worker | trigger | ingest (public feeds → ritual)",
     )
     parser.add_argument(
         "--ritual",
@@ -401,6 +424,16 @@ def main() -> None:
         "--payload",
         default="{}",
         help="JSON payload for --mode trigger",
+    )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="With --mode ingest: skip network, use offline synthetic tick",
+    )
+    parser.add_argument(
+        "--no-ritual",
+        action="store_true",
+        help="With --mode ingest: print snapshot only (do not run ritual)",
     )
     args = parser.parse_args()
 
@@ -416,6 +449,16 @@ def main() -> None:
             sys.exit(2)
         result = trigger_ritual(args.ritual, payload)
         print(json.dumps(result, indent=2))
+        sys.exit(0 if result.get("status") == "success" else 1)
+    elif args.mode == "ingest":
+        from spire_reactor.ingest.public_feeds import fetch_demo_snapshot, synthetic_tick
+
+        snap = synthetic_tick() if args.synthetic else fetch_demo_snapshot()
+        if args.no_ritual:
+            print(json.dumps(snap, indent=2))
+            sys.exit(0)
+        result = trigger_ritual("gas_burn_update", snap.get("operator_payload") or {})
+        print(json.dumps({"snapshot": snap, "ritual": result}, indent=2))
         sys.exit(0 if result.get("status") == "success" else 1)
 
 
