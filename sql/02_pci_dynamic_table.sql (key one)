@@ -1,0 +1,5 @@
+CREATE DYNAMIC TABLE DT_PCI_ADJUSTED TARGET_LAG = '5 seconds' AS
+SELECT plant_id, hour_ts, 
+       SUM(energy_mwh)/NULLIF(SUM(gas_m3*heat_rate_factor),0) AS pci_index,
+       etrm_calc(award_mmbtu, effective_hr) AS forecast
+FROM STAGING_GAS_BURN;
