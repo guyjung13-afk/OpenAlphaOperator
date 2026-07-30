@@ -23,9 +23,10 @@ OpenAlphaOperator/
 │   │   ├── integrations.py # catalog + secrets/env loader
 │   │   └── connectors.py   # connection tests (Snowflake, EIA, Redis, …)
 │   ├── ingest/             # public feeds
+│   ├── store/              # Snowflake landing (SoR write path)
 │   ├── workflows/          # Temporal rituals (scaffold)
 │   └── activities/         # fusion / propagation (scaffold)
-├── sql/                    # Snowflake streams, DTs, tasks
+├── sql/                    # Landing DDL, streams, DTs, tasks
 └── scripts/
 ```
 
@@ -116,15 +117,52 @@ curl -s -X POST http://localhost:8000/ritual/operator-update \
 
 ## Snowflake
 
-In Snowsight (or your preferred client), run the scripts in order:
+### 1. Apply DDL (Snowsight)
 
-1. `sql/01_base_ingestion_stream.sql`
-2. `sql/02_pci_dynamic_table.sql`
-3. `sql/03_etrm_fusion_view.sql`
-4. `sql/04_propagation_task.sql`
+Run in order against your target database/schema (defaults: `ALPHAGEN_ETRM.GOLD`):
 
-Configure credentials via **Dashboard Setup** (secrets.toml) or `.env` (see `.env.example`).  
+1. `sql/00_landing_operator_burn.sql` — **LANDING_OPERATOR_BURN_UPDATE** + **STAGING_GAS_BURN**
+2. `sql/01_base_ingestion_stream.sql` — stream on staging
+3. `sql/02_pci_dynamic_table.sql`
+4. `sql/03_etrm_fusion_view.sql`
+5. `sql/04_propagation_task.sql`
+
+### 2. Credentials
+
+Configure via **Dashboard Setup** (secrets.toml) or `.env` (see `.env.example`).  
 Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
+
+### 3. Ritual landing write (live path)
+
+`gas_burn_update` / operator-update appends a row to **LANDING_OPERATOR_BURN_UPDATE** when:
+
+- Snowflake account/user/password are configured (not placeholders), and
+- `DEMO_MODE=false` **or** `SNOWFLAKE_WRITE=true`
+
+Optional dual-write maps the same ritual into **STAGING_GAS_BURN** (for the stream/DT path). **Off by default** until gas_m3 unit mapping is real — enable with `SNOWFLAKE_STAGING_WRITE=true`.
+
+Ritual `mode` is **`live` only when landing succeeds**; otherwise `stub` (check the `snowflake` object for skip/fail detail).
+
+Ritual response includes a safe `snowflake` object:
+
+```json
+{
+  "ok": true,
+  "load_id": "…",
+  "landing_table": "ALPHAGEN_ETRM.GOLD.LANDING_OPERATOR_BURN_UPDATE",
+  "staging_written": true,
+  "message": "Landed load_id=…"
+}
+```
+
+Demo mode skips the write (`skipped: true`) so local desks stay offline-safe.
+
+```bash
+# Live write test (needs real creds + DDL applied)
+# DEMO_MODE=false  or  SNOWFLAKE_WRITE=true
+python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
+  --payload "{\"plant_id\":\"LINDA-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750,\"notes\":\"landing check\"}"
+```
 
 ## Status
 
@@ -135,7 +173,8 @@ Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
 | Public feeds ingest | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
-| Snowflake SQL | System-of-record scripts; apply in Snowsight |
+| Snowflake landing | Ritual → `LANDING_OPERATOR_BURN_UPDATE` (+ optional staging dual-write) |
+| Snowflake SQL | Landing DDL + stream/DT/task scripts; apply in Snowsight |
 | Temporal fusion | Scaffold (`workflows/` + `activities/`) |
 
 ## Security

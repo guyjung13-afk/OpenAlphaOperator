@@ -83,6 +83,19 @@ def _error(event: str, **kwargs: Any) -> None:
         log.error("%s %s", event, extra)
 
 
+def _runtime_demo_mode() -> bool:
+    """
+    Single source for demo vs live gates: Setup secrets → env (is_demo_mode).
+    Falls back to process DEMO_MODE env if integrations unavailable.
+    """
+    try:
+        from spire_reactor.config.integrations import is_demo_mode
+
+        return is_demo_mode()
+    except Exception:  # noqa: BLE001
+        return os.getenv("DEMO_MODE", "true").lower() == "true"
+
+
 # ── config ───────────────────────────────────────────────────────────
 # Local default is localhost; Compose overrides REDIS_URL=redis://redis:6379
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -176,10 +189,12 @@ def trigger_ritual(
     """
     payload = dict(payload or {})
     canonical = _RITUAL_ALIASES.get(ritual_type, ritual_type)
-    _info("ritual_triggered", ritual_type=canonical, raw=ritual_type, demo=DEMO_MODE)
+    demo = _runtime_demo_mode()
+    _info("ritual_triggered", ritual_type=canonical, raw=ritual_type, demo=demo)
 
     if canonical == "gas_burn_update":
         heat_rate = float(payload.get("heat_rate") or 7.5)
+        hours = float(payload.get("hours") or 1.0)
         # Prefer explicit award_mw; else derive loosely from award_mmbtu / heat_rate
         if "award_mw" in payload and payload["award_mw"] is not None:
             award_mw = float(payload["award_mw"])
@@ -198,14 +213,20 @@ def trigger_ritual(
             award_mw=award_mw,
             actual_burn_mmbtu=actual,
             prev_accum_mmbtu=float(payload.get("prev_accum_mmbtu") or 0.0),
-            hours=float(payload.get("hours") or 1.0),
+            hours=hours,
             threshold_pct=float(payload.get("threshold_pct") or 5.0),
         )
         etrm_status, etrm_action = pci_band_to_etrm(burn["pci_status"])
         plant_id = str(payload.get("plant_id") or "DEMO-1")
         notes = str(payload.get("notes") or "")
+        award_mmbtu = (
+            float(payload["award_mmbtu"])
+            if payload.get("award_mmbtu") is not None
+            else award_mw * heat_rate * hours
+        )
 
         # Envelope: status=success|error; outcome=pipeline result for clients
+        # mode starts stub; becomes live only when Snowflake landing succeeds
         outcome = (
             "ALL_DOWNSTREAM_UPDATED"
             if burn["pci_status"] == "GREEN"
@@ -215,6 +236,11 @@ def trigger_ritual(
             "status": "success",
             "outcome": outcome,
             "pci": heat_rate,
+            "heat_rate": heat_rate,
+            "award_mw": award_mw,
+            "award_mmbtu": award_mmbtu,
+            "actual_burn_mmbtu": actual,
+            "hours": hours,
             "pci_status": burn["pci_status"],
             "etrm_status": etrm_status,
             "etrm_action": etrm_action,
@@ -230,11 +256,52 @@ def trigger_ritual(
                 "Redis cache:latest_pci_etrm",
             ],
             "ritual_at": burn["timestamp"],
-            "mode": "stub" if DEMO_MODE else "live",
+            "mode": "stub",
             "ritual": canonical,
             "result": burn,
         }
-        # TODO Phase 3: Snowflake LANDING_OPERATOR_BURN_UPDATE (Data Vault)
+        # System of record: append to Snowflake LANDING_OPERATOR_BURN_UPDATE when live
+        try:
+            from spire_reactor.store.landing import insert_operator_burn_update
+
+            sf_status = insert_operator_burn_update(public, payload, burn)
+        except Exception as exc:  # noqa: BLE001 — never block ritual on store import/path
+            sf_status = {
+                "ok": False,
+                "skipped": False,
+                "message": f"Snowflake landing error: {exc}",
+            }
+        public["snowflake"] = sf_status
+        if sf_status.get("ok"):
+            public["mode"] = "live"
+            consumers = list(public.get("consumers") or [])
+            landing = sf_status.get("landing_table") or "LANDING_OPERATOR_BURN_UPDATE"
+            if landing not in consumers:
+                consumers.append(landing)
+            if sf_status.get("staging_written"):
+                consumers.append("STAGING_GAS_BURN")
+            public["consumers"] = consumers
+            _info(
+                "snowflake_landing_ok",
+                load_id=sf_status.get("load_id"),
+                table=sf_status.get("landing_table"),
+                staging=sf_status.get("staging_written"),
+            )
+        elif sf_status.get("skipped"):
+            # demo / not configured — stay stub; clients must read snowflake for detail
+            public["mode"] = "stub"
+            _info(
+                "snowflake_landing_skipped",
+                reason=sf_status.get("reason"),
+                message=sf_status.get("message"),
+            )
+        else:
+            public["mode"] = "stub"
+            _error(
+                "snowflake_landing_failed",
+                message=sf_status.get("message"),
+                load_id=sf_status.get("load_id"),
+            )
         publish_ritual_result("ritual_results", public)
         return public
 
@@ -302,12 +369,28 @@ class RitualRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    snowflake_cfg = False
+    snowflake_write = False
+    try:
+        from spire_reactor.store.snowflake_client import (
+            is_snowflake_configured,
+            snowflake_write_enabled,
+        )
+
+        snowflake_cfg = is_snowflake_configured()
+        snowflake_write = snowflake_write_enabled()
+    except Exception:  # noqa: BLE001
+        pass
+    demo = _runtime_demo_mode()
     return {
         "status": "ok",
         "service": "spire-reactor",
         "env": APP_ENV,
-        "demo": DEMO_MODE,
+        "demo": demo,
+        "demo_env": DEMO_MODE,
         "redis_url": REDIS_URL,
+        "snowflake_configured": snowflake_cfg,
+        "snowflake_write_enabled": snowflake_write,
     }
 
 
