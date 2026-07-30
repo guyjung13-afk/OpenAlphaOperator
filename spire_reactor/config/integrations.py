@@ -131,12 +131,13 @@ INTEGRATIONS: list[dict[str, Any]] = [
     },
     {
         "id": "temporal",
-        "label": "Temporal Cloud (durable rituals)",
+        "label": "Temporal (durable rituals)",
         "category": "orchestrate",
-        "phase": "phase2",
+        "phase": "live",
         "auth_required": True,
-        "description": "Durable PCI/ETRM workflows. Scaffold only — not wired yet.",
-        "help_url": "https://temporal.io/",
+        "optional": True,
+        "description": "Durable PCI_ETRM_Operator_Update workflow. Local: host localhost:7233; Cloud: host + API key + TLS.",
+        "help_url": "https://docs.temporal.io/",
         "fields": [
             {
                 "key": "host",
@@ -154,7 +155,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
             },
             {
                 "key": "api_key",
-                "label": "API key",
+                "label": "API key (Cloud)",
                 "secret": True,
                 "env": "TEMPORAL_API_KEY",
                 "default": "",
@@ -167,9 +168,10 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "id": "webhooks",
         "label": "Downstream webhooks (BI / Teams / Spire)",
         "category": "notify",
-        "phase": "phase2",
+        "phase": "live",
         "auth_required": True,
-        "description": "Auto-propagation and consumer refresh. Phase 2 slot.",
+        "optional": True,
+        "description": "Optional fusion notify URL (POST JSON). Used by fuse_pci_etrm activity.",
         "help_url": None,
         "fields": [
             {
@@ -194,9 +196,10 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "id": "xai",
         "label": "xAI / Grok (fusion insights)",
         "category": "ai",
-        "phase": "phase2",
+        "phase": "live",
         "auth_required": True,
-        "description": "Optional AI reasoner for PCI/ETRM fusion text. Not wired yet.",
+        "optional": True,
+        "description": "Optional AI text for fusion. Without a key, rule-based insights are used.",
         "help_url": "https://x.ai/",
         "fields": [
             {

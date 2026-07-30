@@ -119,8 +119,8 @@ Demo mode needs <b>zero</b> logins.
 
     st.title("Connect real-time integrations")
     st.caption(
-        "Open-Meteo needs no login. EIA / Redis / Snowflake accept credentials here. "
-        "Phase 2 slots (Temporal, webhooks, xAI) are listed but not required yet."
+        "Open-Meteo needs no login. Snowflake is required for live SoR. "
+        "Temporal, webhooks, and xAI are optional (durable fusion / notify / AI text)."
     )
 
     # Mode
@@ -189,34 +189,36 @@ Demo mode needs <b>zero</b> logins.
                     icon = "✅" if r.get("ok") else ("⏭" if r.get("skipped") else "❌")
                     st.caption(f"{icon} {r.get('message')} · {r.get('latency_ms')} ms")
 
-    # ── Phase 2 ──────────────────────────────────────────────────────
-    st.subheader("Phase 2 (coming soon)")
-    st.caption("Fields can be saved for later; tests report not-wired.")
-    for integ in phase2_integrations():
-        iid = integ["id"]
-        existing = dict(creds.get(iid) or {})
-        with st.expander(f"⬜ {integ['label']}", expanded=False):
-            st.write(integ.get("description") or "")
-            cols = st.columns(2)
-            for idx, f in enumerate(integ["fields"]):
-                sk = f"setup_{iid}_{f['key']}"
-                with cols[idx % 2]:
-                    if f.get("secret"):
-                        st.text_input(
-                            f["label"],
-                            type="password",
-                            key=sk,
-                            placeholder="Optional — save for later",
-                        )
-                    else:
-                        st.text_input(f["label"], key=sk)
-            if st.button("Test (Phase 2)", key=f"test_{iid}"):
-                fields = _collect_form_fields(integ, existing)
-                st.session_state.test_results[iid] = run_test(str(integ["test"]), fields)
-                st.rerun()
-            r = results.get(iid)
-            if r:
-                st.caption(f"{r.get('message')}")
+    # ── Phase 2 (reserved for future slots) ──────────────────────────
+    phase2 = phase2_integrations()
+    if phase2:
+        st.subheader("Phase 2 (coming soon)")
+        st.caption("Fields can be saved for later; tests report not-wired.")
+        for integ in phase2:
+            iid = integ["id"]
+            existing = dict(creds.get(iid) or {})
+            with st.expander(f"⬜ {integ['label']}", expanded=False):
+                st.write(integ.get("description") or "")
+                cols = st.columns(2)
+                for idx, f in enumerate(integ["fields"]):
+                    sk = f"setup_{iid}_{f['key']}"
+                    with cols[idx % 2]:
+                        if f.get("secret"):
+                            st.text_input(
+                                f["label"],
+                                type="password",
+                                key=sk,
+                                placeholder="Optional — save for later",
+                            )
+                        else:
+                            st.text_input(f["label"], key=sk)
+                if st.button("Test (Phase 2)", key=f"test_{iid}"):
+                    fields = _collect_form_fields(integ, existing)
+                    st.session_state.test_results[iid] = run_test(str(integ["test"]), fields)
+                    st.rerun()
+                r = results.get(iid)
+                if r:
+                    st.caption(f"{r.get('message')}")
 
     st.divider()
 

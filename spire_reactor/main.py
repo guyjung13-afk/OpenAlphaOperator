@@ -5,11 +5,12 @@ Spire Reactor — Sovereign Gas Burn PCI + ETRM Ritual Engine
 Entry point for docker compose and local ops.
 
 Modes:
-  api     (default CLI) FastAPI on :8000 — /health, /ritual/*
-  worker  Redis pub/sub (Compose: --profile full)
-  trigger one-shot CLI ritual for scripts / shift checks
+  api       (default CLI) FastAPI on :8000 — /health, /ritual/*
+  worker    Redis pub/sub (Compose: --profile full)
+  temporal  Temporal worker for PCI_ETRM_Operator_Update (needs TEMPORAL_HOST)
+  trigger   one-shot CLI ritual for scripts / shift checks
 
-Image default CMD is Streamlit; Compose overrides worker to --mode worker.
+Image default CMD is Streamlit; Compose overrides worker / temporal profiles.
 
 Operator rituals (dispatcher + stubs):
   - gas_burn_update / operator_update  (Hourly Burn Update)
@@ -178,14 +179,138 @@ def publish_ritual_result(channel: str, payload: dict[str, Any]) -> None:
         _info("redis_publish_skipped", error=str(exc), demo=DEMO_MODE)
 
 
+# ── gas burn core (local + Temporal activity share this) ─────────────
+def execute_gas_burn_local(
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    via_temporal: bool = False,
+) -> dict[str, Any]:
+    """
+    Deterministic gas_burn_update: math → optional Snowflake land → Redis publish.
+
+    via_temporal=True marks orchestrator metadata for activities (no re-dispatch).
+    """
+    payload = dict(payload or {})
+    heat_rate = float(payload.get("heat_rate") or 7.5)
+    hours = float(payload.get("hours") or 1.0)
+    if "award_mw" in payload and payload["award_mw"] is not None:
+        award_mw = float(payload["award_mw"])
+    elif payload.get("award_mmbtu"):
+        award_mw = float(payload["award_mmbtu"]) / heat_rate if heat_rate else 0.0
+    else:
+        award_mw = 500.0
+
+    actual = float(
+        payload.get("actual_burn_mmbtu")
+        if payload.get("actual_burn_mmbtu") is not None
+        else 3750.0
+    )
+    burn = calculate_gas_burn(
+        heat_rate=heat_rate,
+        award_mw=award_mw,
+        actual_burn_mmbtu=actual,
+        prev_accum_mmbtu=float(payload.get("prev_accum_mmbtu") or 0.0),
+        hours=hours,
+        threshold_pct=float(payload.get("threshold_pct") or 5.0),
+    )
+    etrm_status, etrm_action = pci_band_to_etrm(burn["pci_status"])
+    plant_id = str(payload.get("plant_id") or "DEMO-1")
+    notes = str(payload.get("notes") or "")
+    award_mmbtu = (
+        float(payload["award_mmbtu"])
+        if payload.get("award_mmbtu") is not None
+        else award_mw * heat_rate * hours
+    )
+
+    outcome = (
+        "ALL_DOWNSTREAM_UPDATED"
+        if burn["pci_status"] == "GREEN"
+        else "RITUAL_QUEUED"
+    )
+    public: dict[str, Any] = {
+        "status": "success",
+        "outcome": outcome,
+        "pci": heat_rate,
+        "heat_rate": heat_rate,
+        "award_mw": award_mw,
+        "award_mmbtu": award_mmbtu,
+        "actual_burn_mmbtu": actual,
+        "hours": hours,
+        "pci_status": burn["pci_status"],
+        "etrm_status": etrm_status,
+        "etrm_action": etrm_action,
+        "deviation_pct": burn["variance_pct"],
+        "estimated_burn_mmbtu": burn["estimated_burn_mmbtu"],
+        "new_accum_mmbtu": burn["new_accum_mmbtu"],
+        "plant_id": plant_id,
+        "notes": notes,
+        "consumers": [
+            "Power BI",
+            "Provider Exports",
+            "Compliance Ledger",
+            "Redis cache:latest_pci_etrm",
+        ],
+        "ritual_at": burn["timestamp"],
+        "mode": "stub",
+        "ritual": "gas_burn_update",
+        "result": burn,
+        "orchestrator": "temporal-activity" if via_temporal else "local",
+    }
+    try:
+        from spire_reactor.store.landing import insert_operator_burn_update
+
+        sf_status = insert_operator_burn_update(public, payload, burn)
+    except Exception as exc:  # noqa: BLE001
+        sf_status = {
+            "ok": False,
+            "skipped": False,
+            "message": f"Snowflake landing error: {exc}",
+        }
+    public["snowflake"] = sf_status
+    if sf_status.get("ok"):
+        public["mode"] = "live"
+        consumers = list(public.get("consumers") or [])
+        landing = sf_status.get("landing_table") or "LANDING_OPERATOR_BURN_UPDATE"
+        if landing not in consumers:
+            consumers.append(landing)
+        if sf_status.get("staging_written"):
+            consumers.append("STAGING_GAS_BURN")
+        public["consumers"] = consumers
+        _info(
+            "snowflake_landing_ok",
+            load_id=sf_status.get("load_id"),
+            table=sf_status.get("landing_table"),
+            staging=sf_status.get("staging_written"),
+        )
+    elif sf_status.get("skipped"):
+        public["mode"] = "stub"
+        _info(
+            "snowflake_landing_skipped",
+            reason=sf_status.get("reason"),
+            message=sf_status.get("message"),
+        )
+    else:
+        public["mode"] = "stub"
+        _error(
+            "snowflake_landing_failed",
+            message=sf_status.get("message"),
+            load_id=sf_status.get("load_id"),
+        )
+    publish_ritual_result("ritual_results", public)
+    return public
+
+
 # ── ritual dispatcher ────────────────────────────────────────────────
 def trigger_ritual(
     ritual_type: str,
     payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
-    Core ritual dispatcher — local + deterministic for speed & sovereignty.
-    Later: Temporal client for durable execution + compensation.
+    Core ritual dispatcher.
+
+    gas_burn_update:
+      - When Temporal is configured + enabled → durable PCI_ETRM_Operator_Update
+      - Else local execute_gas_burn_local (math + SoR + Redis)
     """
     payload = dict(payload or {})
     canonical = _RITUAL_ALIASES.get(ritual_type, ritual_type)
@@ -193,117 +318,42 @@ def trigger_ritual(
     _info("ritual_triggered", ritual_type=canonical, raw=ritual_type, demo=demo)
 
     if canonical == "gas_burn_update":
-        heat_rate = float(payload.get("heat_rate") or 7.5)
-        hours = float(payload.get("hours") or 1.0)
-        # Prefer explicit award_mw; else derive loosely from award_mmbtu / heat_rate
-        if "award_mw" in payload and payload["award_mw"] is not None:
-            award_mw = float(payload["award_mw"])
-        elif payload.get("award_mmbtu"):
-            award_mw = float(payload["award_mmbtu"]) / heat_rate if heat_rate else 0.0
-        else:
-            award_mw = 500.0
-
-        actual = float(
-            payload.get("actual_burn_mmbtu")
-            if payload.get("actual_burn_mmbtu") is not None
-            else 3750.0
-        )
-        burn = calculate_gas_burn(
-            heat_rate=heat_rate,
-            award_mw=award_mw,
-            actual_burn_mmbtu=actual,
-            prev_accum_mmbtu=float(payload.get("prev_accum_mmbtu") or 0.0),
-            hours=hours,
-            threshold_pct=float(payload.get("threshold_pct") or 5.0),
-        )
-        etrm_status, etrm_action = pci_band_to_etrm(burn["pci_status"])
-        plant_id = str(payload.get("plant_id") or "DEMO-1")
-        notes = str(payload.get("notes") or "")
-        award_mmbtu = (
-            float(payload["award_mmbtu"])
-            if payload.get("award_mmbtu") is not None
-            else award_mw * heat_rate * hours
-        )
-
-        # Envelope: status=success|error; outcome=pipeline result for clients
-        # mode starts stub; becomes live only when Snowflake landing succeeds
-        outcome = (
-            "ALL_DOWNSTREAM_UPDATED"
-            if burn["pci_status"] == "GREEN"
-            else "RITUAL_QUEUED"
-        )
-        public = {
-            "status": "success",
-            "outcome": outcome,
-            "pci": heat_rate,
-            "heat_rate": heat_rate,
-            "award_mw": award_mw,
-            "award_mmbtu": award_mmbtu,
-            "actual_burn_mmbtu": actual,
-            "hours": hours,
-            "pci_status": burn["pci_status"],
-            "etrm_status": etrm_status,
-            "etrm_action": etrm_action,
-            "deviation_pct": burn["variance_pct"],
-            "estimated_burn_mmbtu": burn["estimated_burn_mmbtu"],
-            "new_accum_mmbtu": burn["new_accum_mmbtu"],
-            "plant_id": plant_id,
-            "notes": notes,
-            "consumers": [
-                "Power BI",
-                "Provider Exports",
-                "Compliance Ledger",
-                "Redis cache:latest_pci_etrm",
-            ],
-            "ritual_at": burn["timestamp"],
-            "mode": "stub",
-            "ritual": canonical,
-            "result": burn,
-        }
-        # System of record: append to Snowflake LANDING_OPERATOR_BURN_UPDATE when live
+        # Durable path when Temporal host is live and dispatch enabled
         try:
-            from spire_reactor.store.landing import insert_operator_burn_update
+            from spire_reactor.temporal.settings import temporal_dispatch_enabled
 
-            sf_status = insert_operator_burn_update(public, payload, burn)
-        except Exception as exc:  # noqa: BLE001 — never block ritual on store import/path
-            sf_status = {
-                "ok": False,
-                "skipped": False,
-                "message": f"Snowflake landing error: {exc}",
-            }
-        public["snowflake"] = sf_status
-        if sf_status.get("ok"):
-            public["mode"] = "live"
-            consumers = list(public.get("consumers") or [])
-            landing = sf_status.get("landing_table") or "LANDING_OPERATOR_BURN_UPDATE"
-            if landing not in consumers:
-                consumers.append(landing)
-            if sf_status.get("staging_written"):
-                consumers.append("STAGING_GAS_BURN")
-            public["consumers"] = consumers
-            _info(
-                "snowflake_landing_ok",
-                load_id=sf_status.get("load_id"),
-                table=sf_status.get("landing_table"),
-                staging=sf_status.get("staging_written"),
-            )
-        elif sf_status.get("skipped"):
-            # demo / not configured — stay stub; clients must read snowflake for detail
-            public["mode"] = "stub"
-            _info(
-                "snowflake_landing_skipped",
-                reason=sf_status.get("reason"),
-                message=sf_status.get("message"),
-            )
-        else:
-            public["mode"] = "stub"
-            _error(
-                "snowflake_landing_failed",
-                message=sf_status.get("message"),
-                load_id=sf_status.get("load_id"),
-            )
-        publish_ritual_result("ritual_results", public)
-        return public
+            use_temporal = temporal_dispatch_enabled()
+        except Exception:  # noqa: BLE001
+            use_temporal = False
+
+        if use_temporal:
+            try:
+                from spire_reactor.temporal.client import execute_pci_etrm_workflow_sync
+
+                _info("temporal_workflow_start", ritual="gas_burn_update")
+                result = execute_pci_etrm_workflow_sync(payload)
+                if result.get("status") == "error":
+                    _error("temporal_workflow_error", message=result.get("message"))
+                    # Fall back to local so the desk still works
+                    local = execute_gas_burn_local(payload, via_temporal=False)
+                    local["temporal_fallback"] = result
+                    return local
+                _info(
+                    "temporal_workflow_ok",
+                    workflow_id=result.get("workflow_id"),
+                    mode=result.get("mode"),
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                _error("temporal_workflow_failed", error=str(exc))
+                local = execute_gas_burn_local(payload, via_temporal=False)
+                local["temporal_fallback"] = {
+                    "ok": False,
+                    "message": str(exc)[:300],
+                }
+                return local
+
+        return execute_gas_burn_local(payload, via_temporal=False)
 
     if canonical == "morning_check":
         package = {
@@ -372,6 +422,8 @@ def health() -> dict[str, Any]:
     snowflake_cfg = False
     snowflake_write = False
     snowflake_read = False
+    temporal_cfg = False
+    temporal_dispatch = False
     try:
         from spire_reactor.store.snowflake_client import (
             is_snowflake_configured,
@@ -382,6 +434,16 @@ def health() -> dict[str, Any]:
         snowflake_cfg = is_snowflake_configured()
         snowflake_write = snowflake_write_enabled()
         snowflake_read = snowflake_read_enabled()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from spire_reactor.temporal.settings import (
+            is_temporal_configured,
+            temporal_dispatch_enabled,
+        )
+
+        temporal_cfg = is_temporal_configured()
+        temporal_dispatch = temporal_dispatch_enabled()
     except Exception:  # noqa: BLE001
         pass
     demo = _runtime_demo_mode()
@@ -395,6 +457,8 @@ def health() -> dict[str, Any]:
         "snowflake_configured": snowflake_cfg,
         "snowflake_write_enabled": snowflake_write,
         "snowflake_read_enabled": snowflake_read,
+        "temporal_configured": temporal_cfg,
+        "temporal_dispatch_enabled": temporal_dispatch,
     }
 
 
@@ -510,9 +574,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Spire Reactor — PCI + ETRM")
     parser.add_argument(
         "--mode",
-        choices=["api", "worker", "trigger", "ingest"],
+        choices=["api", "worker", "temporal", "trigger", "ingest"],
         default=os.getenv("SPIRE_MODE", "api"),
-        help="api | worker | trigger | ingest (public feeds → ritual)",
+        help="api | worker | temporal | trigger | ingest",
     )
     parser.add_argument(
         "--ritual",
@@ -540,6 +604,11 @@ def main() -> None:
         run_api()
     elif args.mode == "worker":
         run_worker()
+    elif args.mode == "temporal":
+        from spire_reactor.temporal.worker import run_temporal_worker_sync
+
+        _info("starting_temporal_worker")
+        run_temporal_worker_sync()
     elif args.mode == "trigger":
         try:
             payload = json.loads(args.payload)

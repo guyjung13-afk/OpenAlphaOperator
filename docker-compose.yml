@@ -75,5 +75,31 @@ services:
     restart: unless-stopped
     profiles: ["full"] # start with: docker compose --profile full up
 
+  # Temporal worker — durable PCI_ETRM_Operator_Update
+  # Requires TEMPORAL_HOST (local dev server or Temporal Cloud).
+  # Local server: temporal server start-dev  → host localhost:7233
+  # Start: docker compose --profile temporal up -d --build
+  temporal-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openalpha-temporal-worker
+    command: python -m spire_reactor.main --mode temporal
+    volumes:
+      - .:/app
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+      # TEMPORAL_HOST / TEMPORAL_NAMESPACE / TEMPORAL_API_KEY from .env
+      - TEMPORAL_TASK_QUEUE=spire-reactor
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["temporal"]
+
 volumes:
   redis_data:

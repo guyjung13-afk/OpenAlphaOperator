@@ -363,11 +363,21 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                     sf_note = f" SoR skipped ({sf.get('reason') or 'demo'})."
                 else:
                     sf_note = f" SoR write issue: {sf.get('message') or 'see logs'}."
+                orch = result.get("orchestrator") or "local"
+                fusion = result.get("fusion") or {}
+                if orch == "temporal" or result.get("workflow_id"):
+                    orch_note = f" Temporal workflow `{result.get('workflow_id') or 'ok'}`."
+                elif result.get("temporal_fallback"):
+                    orch_note = " Temporal failed → local fallback."
+                else:
+                    orch_note = " Local ritual."
+                if fusion.get("provider_msg"):
+                    orch_note += f" Fusion: {fusion.get('action') or '—'}"
                 st.success(
                     f"Ritual complete — PCI {st.session_state.pci_status}, "
                     f"ETRM {st.session_state.etrm_status}, "
                     f"variance {st.session_state.deviation_pct:+.2f}%."
-                    f"{sf_note} Acknowledge below for session audit."
+                    f"{sf_note}{orch_note} Acknowledge below for session audit."
                 )
                 st.rerun()
 

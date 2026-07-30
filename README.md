@@ -23,9 +23,10 @@ OpenAlphaOperator/
 │   │   ├── integrations.py # catalog + secrets/env loader
 │   │   └── connectors.py   # connection tests (Snowflake, EIA, Redis, …)
 │   ├── ingest/             # public feeds
-│   ├── store/              # Snowflake landing (SoR write path)
-│   ├── workflows/          # Temporal rituals (scaffold)
-│   └── activities/         # fusion / propagation (scaffold)
+│   ├── store/              # Snowflake landing (SoR write/read)
+│   ├── temporal/           # client, settings, worker
+│   ├── workflows/          # PCI_ETRM_Operator_Update
+│   └── activities/         # compute_and_land + fuse_pci_etrm
 ├── sql/                    # Landing DDL, streams, DTs, tasks
 └── scripts/
 ```
@@ -57,7 +58,8 @@ On first launch the dashboard opens **Setup — Connect real-time integrations**
 | **EIA Open Data** | Optional API key | Free: https://www.eia.gov/opendata/ |
 | **Redis** | Usually no (local) | URL; password in URL if needed |
 | **Snowflake** | Yes (account / user / password) | Required for live (non-demo) path |
-| **Temporal / webhooks / xAI** | Phase 2 | Fields saved for later; not wired yet |
+| **Temporal** | Optional host (+ Cloud API key) | Durable `PCI_ETRM_Operator_Update` |
+| **Webhooks / xAI** | Optional | Fusion notify + optional AI text |
 
 - **Demo only** — continue with zero logins (synthetic + Open-Meteo).
 - **Live integrations** — enter Snowflake (and optional EIA/Redis), **Test connection**, **Save credentials**.
@@ -83,8 +85,12 @@ python -m spire_reactor.main --mode api
 # one-shot ritual (no server)
 python -m spire_reactor.main --mode trigger --ritual gas_burn_update --payload "{\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750}"
 
-# Redis worker (needs Redis up; pre-Temporal)
+# Redis worker (needs Redis up)
 # python -m spire_reactor.main --mode worker
+
+# Temporal worker (needs TEMPORAL_HOST — local dev server or Cloud)
+# temporal server start-dev   # separate terminal, host localhost:7233
+# python -m spire_reactor.main --mode temporal
 
 # Public feeds demo (Open-Meteo; optional EIA_API_KEY) → gas burn ritual
 python -m spire_reactor.main --mode ingest
@@ -95,6 +101,8 @@ python -m spire_reactor.main --mode ingest --no-ritual   # snapshot only
 docker compose up -d --build
 # include Redis worker (spire-reactor):
 docker compose --profile full up -d --build
+# include Temporal worker (requires TEMPORAL_HOST in .env):
+docker compose --profile temporal up -d --build
 ```
 
 ### Public feeds (PoC instead of Snowflake)
@@ -180,6 +188,38 @@ curl -s "http://localhost:8000/sor/landing?limit=5&plant_id=LINDA-1"
 
 Disable reads with `SNOWFLAKE_READ=false`.
 
+## Temporal (durable PCI / ETRM)
+
+When Temporal is configured and dispatch is enabled, `gas_burn_update` starts
+workflow **`PCI_ETRM_Operator_Update`** instead of running only in-process:
+
+1. **Activity** `compute_and_land_gas_burn` — burn math + Snowflake landing + Redis  
+2. **Activity** `fuse_pci_etrm` — rule-based (optional xAI) insight, Redis, optional webhook  
+
+| Gate | Behavior |
+|------|----------|
+| No `TEMPORAL_HOST` | Local ritual only (default) |
+| Host set + `DEMO_MODE=false` | Dispatch to Temporal |
+| `TEMPORAL_USE=true` | Force dispatch even in demo |
+| `TEMPORAL_USE=false` | Never dispatch |
+| Worker down / start fails | **Falls back to local** ritual (`temporal_fallback` on response) |
+
+```bash
+# 1) Temporal frontend (example local)
+temporal server start-dev
+
+# 2) Worker
+export TEMPORAL_HOST=localhost:7233
+export TEMPORAL_USE=true
+python -m spire_reactor.main --mode temporal
+
+# 3) Trigger (another shell) — waits for workflow result
+python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
+  --payload "{\"plant_id\":\"LINDA-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750}"
+```
+
+Setup stage: **Temporal**, **webhooks**, and **xAI** are live optional integrations with connection tests.
+
 ## Status
 
 | Layer | State |
@@ -192,7 +232,7 @@ Disable reads with `SNOWFLAKE_READ=false`.
 | Snowflake landing | Ritual → `LANDING_OPERATOR_BURN_UPDATE` (+ optional staging dual-write) |
 | Snowflake SoR read | Cockpit table + `GET /sor/landing` when credentials configured |
 | Snowflake SQL | Landing DDL + stream/DT/task scripts; apply in Snowsight |
-| Temporal fusion | Scaffold (`workflows/` + `activities/`) |
+| Temporal fusion | `PCI_ETRM_Operator_Update` workflow + worker (`--mode temporal`) |
 
 ## Security
 
