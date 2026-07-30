@@ -20,6 +20,7 @@ from spire_reactor.store.snowflake_client import (
     fq_table,
     is_snowflake_configured,
     redact_secrets,
+    snowflake_read_enabled,
     snowflake_settings,
     snowflake_write_enabled,
 )
@@ -345,3 +346,174 @@ def insert_operator_burn_update(
         out["staging_error"] = staging_error
         out["message"] += " (staging dual-write failed; landing OK)"
     return out
+
+
+# ── reads (cockpit SoR path) ─────────────────────────────────────────
+
+_READ_COLUMNS = (
+    "load_id",
+    "load_ts",
+    "ritual_at",
+    "plant_id",
+    "heat_rate",
+    "award_mw",
+    "award_mmbtu",
+    "actual_burn_mmbtu",
+    "estimated_burn_mmbtu",
+    "variance_pct",
+    "new_accum_mmbtu",
+    "hours",
+    "pci_status",
+    "etrm_status",
+    "etrm_action",
+    "outcome",
+    "notes",
+    "ritual_name",
+    "source_system",
+    "operator_id",
+)
+
+
+def _serialize_cell(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    # Snowflake VARIANT / Decimal etc.
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:  # noqa: BLE001
+            pass
+    if type(value).__name__ == "Decimal":
+        return float(value)
+    return value
+
+
+def fetch_recent_operator_burns(
+    limit: int = 25,
+    plant_id: Optional[str] = None,
+    *,
+    creds: Optional[dict[str, dict[str, str]]] = None,
+) -> dict[str, Any]:
+    """
+    Read recent rows from LANDING_OPERATOR_BURN_UPDATE (system of record).
+
+    Returns safe status:
+      {ok, skipped, reason?, rows, count, table, message, database, schema}
+    Never includes credentials. raw_payload VARIANT is omitted from default select.
+    """
+    limit = max(1, min(int(limit or 25), 200))
+    plant_filter = (plant_id or "").strip() or None
+
+    if not snowflake_read_enabled(creds):
+        if not is_snowflake_configured(creds):
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "not_configured",
+                "rows": [],
+                "count": 0,
+                "message": "Snowflake read skipped — credentials not configured",
+            }
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "disabled",
+            "rows": [],
+            "count": 0,
+            "message": "Snowflake read skipped — SNOWFLAKE_READ=false",
+        }
+
+    settings = snowflake_settings(creds)
+    try:
+        table = fq_table(LANDING_TABLE, creds)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "skipped": False,
+            "rows": [],
+            "count": 0,
+            "message": f"Invalid Snowflake identifier: {exc}",
+            "database": settings["database"],
+            "schema": settings["schema"],
+        }
+
+    cols = ", ".join(_READ_COLUMNS)
+    # ORDER BY load_ts then ritual_at for stable newest-first
+    if plant_filter:
+        sql = f"""
+            SELECT {cols}
+            FROM {table}
+            WHERE plant_id = %s
+            ORDER BY load_ts DESC NULLS LAST, ritual_at DESC NULLS LAST
+            LIMIT %s
+        """
+        params: tuple[Any, ...] = (plant_filter, limit)
+    else:
+        sql = f"""
+            SELECT {cols}
+            FROM {table}
+            ORDER BY load_ts DESC NULLS LAST, ritual_at DESC NULLS LAST
+            LIMIT %s
+        """
+        params = (limit,)
+
+    try:
+        with connection(creds) as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, params)
+                raw_rows = cur.fetchall()
+                colnames = [d[0].lower() for d in (cur.description or [])]
+            finally:
+                cur.close()
+    except Exception as exc:  # noqa: BLE001
+        msg = redact_secrets(str(exc), creds)
+        return {
+            "ok": False,
+            "skipped": False,
+            "rows": [],
+            "count": 0,
+            "landing_table": table,
+            "message": f"Snowflake read failed: {msg}",
+            "database": settings["database"],
+            "schema": settings["schema"],
+        }
+
+    rows: list[dict[str, Any]] = []
+    for raw in raw_rows:
+        item = {
+            colnames[i] if i < len(colnames) else f"c{i}": _serialize_cell(raw[i])
+            for i in range(len(raw))
+        }
+        rows.append(item)
+
+    return {
+        "ok": True,
+        "skipped": False,
+        "rows": rows,
+        "count": len(rows),
+        "landing_table": table,
+        "message": f"Loaded {len(rows)} row(s) from {LANDING_TABLE}",
+        "database": settings["database"],
+        "schema": settings["schema"],
+        "plant_id": plant_filter,
+        "limit": limit,
+    }
+
+
+def fetch_latest_operator_burn(
+    plant_id: Optional[str] = None,
+    *,
+    creds: Optional[dict[str, dict[str, str]]] = None,
+) -> dict[str, Any]:
+    """Convenience: single latest landing row (or empty)."""
+    result = fetch_recent_operator_burns(limit=1, plant_id=plant_id, creds=creds)
+    row = (result.get("rows") or [None])[0]
+    result["row"] = row
+    return result

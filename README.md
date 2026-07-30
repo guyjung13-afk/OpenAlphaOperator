@@ -164,6 +164,22 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
   --payload "{\"plant_id\":\"LINDA-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750,\"notes\":\"landing check\"}"
 ```
 
+### 4. Cockpit / API SoR read
+
+When Snowflake credentials are configured, the Commercial Truth Cockpit shows a
+**Snowflake SoR** section that loads recent landing rows (filterable by plant).
+Reads are allowed even in demo mode so you can verify historical landings.
+
+API (reactor):
+
+```bash
+# After: python -m spire_reactor.main --mode api
+curl -s "http://localhost:8000/sor/landing?limit=10"
+curl -s "http://localhost:8000/sor/landing?limit=5&plant_id=LINDA-1"
+```
+
+Disable reads with `SNOWFLAKE_READ=false`.
+
 ## Status
 
 | Layer | State |
@@ -174,6 +190,7 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
 | Public feeds ingest | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
 | Snowflake landing | Ritual → `LANDING_OPERATOR_BURN_UPDATE` (+ optional staging dual-write) |
+| Snowflake SoR read | Cockpit table + `GET /sor/landing` when credentials configured |
 | Snowflake SQL | Landing DDL + stream/DT/task scripts; apply in Snowsight |
 | Temporal fusion | Scaffold (`workflows/` + `activities/`) |
 

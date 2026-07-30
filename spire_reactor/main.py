@@ -371,14 +371,17 @@ class RitualRequest(BaseModel):
 def health() -> dict[str, Any]:
     snowflake_cfg = False
     snowflake_write = False
+    snowflake_read = False
     try:
         from spire_reactor.store.snowflake_client import (
             is_snowflake_configured,
+            snowflake_read_enabled,
             snowflake_write_enabled,
         )
 
         snowflake_cfg = is_snowflake_configured()
         snowflake_write = snowflake_write_enabled()
+        snowflake_read = snowflake_read_enabled()
     except Exception:  # noqa: BLE001
         pass
     demo = _runtime_demo_mode()
@@ -391,6 +394,7 @@ def health() -> dict[str, Any]:
         "redis_url": REDIS_URL,
         "snowflake_configured": snowflake_cfg,
         "snowflake_write_enabled": snowflake_write,
+        "snowflake_read_enabled": snowflake_read,
     }
 
 
@@ -404,6 +408,7 @@ def root() -> dict[str, str]:
         "dispatch": "POST /ritual",
         "ingest_snapshot": "GET /ingest/snapshot",
         "ingest_ritual": "POST /ingest/demo-ritual",
+        "sor_landing": "GET /sor/landing",
     }
 
 
@@ -433,6 +438,17 @@ def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
     if synthetic:
         return synthetic_tick()
     return fetch_demo_snapshot()
+
+
+@app.get("/sor/landing")
+def sor_landing(limit: int = 25, plant_id: str | None = None) -> dict[str, Any]:
+    """Read recent LANDING_OPERATOR_BURN_UPDATE rows (system of record)."""
+    from spire_reactor.store.landing import fetch_recent_operator_burns
+
+    result = fetch_recent_operator_burns(limit=limit, plant_id=plant_id or None)
+    if result.get("ok") is False and not result.get("skipped"):
+        raise HTTPException(status_code=502, detail=result.get("message") or "SoR read failed")
+    return result
 
 
 @app.post("/ingest/demo-ritual")

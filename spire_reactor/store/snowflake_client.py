@@ -79,6 +79,24 @@ def snowflake_write_enabled(
     return not is_demo_mode(creds)
 
 
+def snowflake_read_enabled(
+    creds: Optional[dict[str, dict[str, str]]] = None,
+) -> bool:
+    """
+    Whether cockpit / API should attempt Snowflake landing reads.
+
+    - Requires configured credentials.
+    - Allowed even in demo_mode so desks can verify SoR after live writes.
+    - SNOWFLAKE_READ=false disables; SNOWFLAKE_READ=true forces when configured.
+    """
+    force = (os.getenv("SNOWFLAKE_READ") or "").strip().lower()
+    if force in ("0", "false", "no", "off"):
+        return False
+    if not is_snowflake_configured(creds):
+        return False
+    return True
+
+
 def connect(creds: Optional[dict[str, dict[str, str]]] = None) -> Any:
     """
     Open a Snowflake connection. Caller must close().
