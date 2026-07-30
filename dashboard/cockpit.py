@@ -17,7 +17,6 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
 from spire_reactor.main import trigger_ritual  # noqa: E402
 
 from dashboard.setup_stage import render_integration_status_strip

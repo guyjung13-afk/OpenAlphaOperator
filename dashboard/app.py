@@ -47,8 +47,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-from dashboard.setup_stage import render_setup_stage, should_show_setup  # noqa: E402
 from dashboard.cockpit import render_cockpit  # noqa: E402
+from dashboard.setup_stage import render_setup_stage, should_show_setup  # noqa: E402
 
 if should_show_setup():
     render_setup_stage()

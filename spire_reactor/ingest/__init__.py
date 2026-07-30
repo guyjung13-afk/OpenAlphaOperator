@@ -3,8 +3,8 @@
 from spire_reactor.ingest.public_feeds import (
     build_operator_payload,
     fetch_demo_snapshot,
-    fetch_open_meteo,
     fetch_eia_natural_gas_price,
+    fetch_open_meteo,
 )
 
 __all__ = [

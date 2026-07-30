@@ -49,3 +49,11 @@ spire_reactor/config/snowflake_creds.env
 # Local test / temp files
 test_success.py
 *.log
+
+# Pytest / coverage / ruff
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+coverage.xml

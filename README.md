@@ -10,9 +10,14 @@ OpenAlphaOperator/
 ├── docker-compose.yml      # redis + dashboard (default); spire-reactor via --profile full
 ├── Dockerfile              # multi-stage, non-root; default CMD = Streamlit
 ├── requirements.txt
+├── requirements-dev.txt    # pytest + ruff (CI / local)
+├── pyproject.toml          # pytest / ruff / coverage config
 ├── .env.example            # copy → .env (never commit secrets)
 ├── .streamlit/
 │   └── secrets.toml.example  # or use Dashboard Setup stage
+├── .github/workflows/
+│   ├── ci.yml              # lint + unit tests on push/PR
+│   └── deploy.yml          # optional compose deploy (tags / manual)
 ├── dashboard/
 │   ├── app.py              # entry: Setup gate → Cockpit
 │   ├── setup_stage.py      # connect real-time integration logins
@@ -27,9 +32,20 @@ OpenAlphaOperator/
 │   ├── temporal/           # client, settings, worker
 │   ├── workflows/          # PCI_ETRM_Operator_Update
 │   └── activities/         # compute_and_land + fuse_pci_etrm
+├── tests/                  # unit tests (no live Snowflake/Temporal)
 ├── sql/                    # Landing DDL, streams, DTs, tasks
 └── scripts/
 ```
+
+## Tests & CI
+
+```bash
+pip install -r requirements-dev.txt
+pytest                 # unit suite
+ruff check spire_reactor dashboard tests
+```
+
+GitHub Actions **CI** runs ruff + pytest on every push/PR to `main`. Deploy is separate (`workflow_dispatch` or version tags).
 
 ## Quick start (local dashboard)
 

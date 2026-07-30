@@ -25,5 +25,5 @@ structlog>=24.0.0,<26.0
 
 # Optional extras (uncomment as needed)
 # prometheus-client>=0.21.0,<1.0
-# pytest>=8.0.0,<9.0
-# ruff>=0.8.0,<1.0
+
+# Dev / CI: pip install -r requirements-dev.txt

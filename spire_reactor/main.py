@@ -33,11 +33,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import redis
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-import redis
-import uvicorn
 
 load_dotenv()
 

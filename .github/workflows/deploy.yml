@@ -1,8 +1,25 @@
+# Optional compose deploy — not the PR gate (see ci.yml).
+# Requires Docker on the runner and any secrets your stack needs.
 name: Deploy Sovereign Reactor
-on: [push]
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose build && docker compose up -d
+      - name: Build and start default stack
+        run: |
+          docker compose build
+          docker compose up -d
+      - name: Health check dashboard
+        run: |
+          sleep 8
+          docker compose ps
+          curl -fsS --retry 5 --retry-delay 3 http://127.0.0.1:8501/ || true

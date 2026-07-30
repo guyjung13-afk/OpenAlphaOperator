@@ -226,7 +226,7 @@ def build_operator_payload(
 
     gas_price = gas.get("price_usd_mmbtu")
     notes_bits = [
-        f"public-feeds demo",
+        "public-feeds demo",
         f"load_factor={load_factor}",
     ]
     if weather.get("ok"):
