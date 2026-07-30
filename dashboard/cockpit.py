@@ -25,7 +25,7 @@ from dashboard.setup_stage import render_integration_status_strip
 DEFAULT_PLANT = os.getenv("DEMO_PLANT_ID", "Linda 1 (Gas)")
 DEFAULT_OPERATOR = os.getenv("DEMO_OPERATOR", "Desk Operator")
 DEFAULT_SHIFT = os.getenv("DEMO_SHIFT", "Day")
-LANDING_LABEL = "LANDING_OPERATOR_BURN_UPDATE"
+LAKE_LABEL = os.getenv("SNOWFLAKE_LAKE_SOURCE", "V_CALCULATED_GAS_BURN")
 
 
 def _init_state() -> None:
@@ -141,7 +141,7 @@ def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
     st.session_state.actual_burn = float(inputs["actual_burn"])
     st.session_state.notes = str(inputs.get("notes") or "")
     st.session_state.last_snowflake = result.get("snowflake")
-    # Invalidate SoR cache so next refresh picks up the new landing row
+    # Invalidate lake cache after ritual (local audit only; no SF write)
     st.session_state.sor_cache = None
 
     snapshot = {
@@ -200,7 +200,7 @@ def render_cockpit() -> None:
         st.caption(
             "Hybrid v1: live burn/PCI/ETRM from Spire Reactor. "
             "Five Truths envelopes are **demo-coupled** (not SCADA). "
-            "Public feeds optional. Snowflake landing = SoR write/read when configured."
+            "Public feeds optional. Snowflake = read-only lake ingest (no writes)."
         )
 
     # ── governance header ────────────────────────────────────────────────
@@ -357,11 +357,15 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                 st.session_state.hours = inputs["hours"]
                 sf = result.get("snowflake") or {}
                 if sf.get("ok"):
-                    sf_note = f" SoR landed ({str(sf.get('load_id') or '')[:8]}…)."
+                    sf_note = f" Optional SF write OK ({str(sf.get('load_id') or '')[:8]}…)."
                 elif sf.get("skipped"):
-                    sf_note = f" SoR skipped ({sf.get('reason') or 'demo'})."
+                    reason = sf.get("reason") or "n/a"
+                    if reason == "read_only_lake":
+                        sf_note = " Lake mode: no SF write (ingest-only)."
+                    else:
+                        sf_note = f" SF write skipped ({reason})."
                 else:
-                    sf_note = f" SoR write issue: {sf.get('message') or 'see logs'}."
+                    sf_note = f" SF write issue: {sf.get('message') or 'see logs'}."
                 orch = result.get("orchestrator") or "local"
                 fusion = result.get("fusion") or {}
                 if orch == "temporal" or result.get("workflow_id"):
@@ -500,55 +504,56 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
     else:
         st.caption("Audit is empty until an update is submitted and acknowledged.")
 
-    # ── Snowflake SoR (landing read path) ────────────────────────────────
+    # ── Snowflake lake (read-only ingest) ────────────────────────────────
     st.divider()
-    st.subheader("Snowflake SoR — LANDING_OPERATOR_BURN_UPDATE")
+    st.subheader(f"Snowflake lake (read-only) — {LAKE_LABEL}")
     st.caption(
-        "Live system-of-record rows written by gas_burn_update rituals. "
-        "Requires Setup credentials + applied `sql/00_landing_operator_burn.sql`. "
-        "Session audit above is local; this table is durable SoR."
+        "Ingest-only commercial truth from the AlphaGen data lake. "
+        "This desk never writes to Snowflake. Operator rituals compute locally "
+        "and log to the session audit; lake rows refresh from existing views."
     )
 
     if st.session_state.last_snowflake:
         sf = st.session_state.last_snowflake
         if sf.get("ok"):
             st.info(
-                f"Last ritual SoR write OK — load_id `{str(sf.get('load_id') or '')[:13]}…` "
-                f"→ {sf.get('landing_table') or LANDING_LABEL}"
+                f"Optional SF write OK — load_id `{str(sf.get('load_id') or '')[:13]}…` "
+                f"(not used in lake mode)"
             )
         elif sf.get("skipped"):
             st.caption(
-                f"Last ritual SoR write skipped ({sf.get('reason') or 'n/a'}): "
-                f"{sf.get('message') or ''}"
+                f"SF write skipped ({sf.get('reason') or 'n/a'}) — expected in read-only lake mode."
             )
         else:
-            st.warning(f"Last ritual SoR write failed: {sf.get('message') or 'unknown'}")
+            st.caption(f"SF write not used: {sf.get('message') or 'n/a'}")
 
-    sor_c1, sor_c2, sor_c3 = st.columns([1, 1, 2])
-    with sor_c1:
-        refresh_sor = st.button("Refresh SoR", use_container_width=True)
-    with sor_c2:
+    lake_c1, lake_c2, lake_c3, lake_c4 = st.columns([1, 1, 1, 1])
+    with lake_c1:
+        refresh_sor = st.button("Refresh lake", use_container_width=True)
+    with lake_c2:
         filter_plant = st.checkbox(
-            "Filter to this plant",
-            value=True,
-            help="When on, only rows for the sidebar plant_id are loaded.",
+            "Filter unit",
+            value=False,
+            help="When on, only rows for the sidebar plant_id / unit name are loaded.",
         )
-    with sor_c3:
+    with lake_c3:
+        prefill_from_lake = st.button("Prefill from latest", use_container_width=True)
+    with lake_c4:
         sor_limit = st.select_slider("Rows", options=[10, 25, 50, 100], value=25)
 
     plant = st.session_state.plant_id if filter_plant else None
-    sor_key = (bool(filter_plant), str(plant or ""), int(sor_limit))
+    sor_key = (bool(filter_plant), str(plant or ""), int(sor_limit), "lake")
     if (
         refresh_sor
         or st.session_state.sor_cache is None
         or st.session_state.get("sor_key") != sor_key
     ):
         try:
-            from spire_reactor.store.landing import fetch_recent_operator_burns
+            from spire_reactor.store.lake import fetch_lake_gas_burn
 
-            st.session_state.sor_cache = fetch_recent_operator_burns(
+            st.session_state.sor_cache = fetch_lake_gas_burn(
                 limit=int(sor_limit),
-                plant_id=plant,
+                unit_name=plant,
             )
             st.session_state.sor_key = sor_key
         except Exception as exc:  # noqa: BLE001
@@ -557,56 +562,86 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                 "skipped": False,
                 "rows": [],
                 "count": 0,
-                "message": f"SoR read error: {exc}",
+                "message": f"Lake read error: {exc}",
             }
             st.session_state.sor_key = sor_key
 
     sor = st.session_state.sor_cache or {}
+    if prefill_from_lake and sor.get("ok") and (sor.get("rows") or []):
+        latest_pre = (sor.get("rows") or [None])[0] or {}
+        if latest_pre.get("plant_id"):
+            st.session_state.plant_id = str(latest_pre["plant_id"])
+        if latest_pre.get("heat_rate"):
+            st.session_state.heat_rate = float(latest_pre["heat_rate"])
+        if latest_pre.get("award_mw") is not None:
+            st.session_state.award_mw = float(latest_pre["award_mw"])
+        if latest_pre.get("actual_burn_mmbtu") is not None:
+            st.session_state.actual_burn = float(latest_pre["actual_burn_mmbtu"])
+        if latest_pre.get("estimated_burn_mmbtu") is not None:
+            st.session_state.estimated_burn = float(latest_pre["estimated_burn_mmbtu"])
+        if latest_pre.get("pci_status"):
+            st.session_state.pci_status = str(latest_pre["pci_status"])
+        if latest_pre.get("variance_pct") is not None:
+            st.session_state.deviation_pct = float(latest_pre["variance_pct"])
+        st.success(
+            f"Prefill from lake unit `{latest_pre.get('plant_id')}` "
+            f"(HE={latest_pre.get('he')}, date={latest_pre.get('operating_date')}). "
+            "Review and submit a local ritual if needed."
+        )
+
     if sor.get("ok"):
         rows = sor.get("rows") or []
         st.success(
-            f"{sor.get('message') or 'OK'} · table `{sor.get('landing_table') or LANDING_LABEL}`"
+            f"{sor.get('message') or 'OK'} · `{sor.get('landing_table') or sor.get('source') or LAKE_LABEL}`"
         )
         if rows:
             display_cols = [
                 c
                 for c in (
-                    "load_ts",
-                    "ritual_at",
+                    "operating_date",
+                    "he",
                     "plant_id",
+                    "fleet_name",
+                    "pipeline",
                     "pci_status",
-                    "etrm_status",
                     "variance_pct",
                     "award_mw",
+                    "rt_mw",
                     "actual_burn_mmbtu",
                     "estimated_burn_mmbtu",
+                    "da_burn_mmbtu",
+                    "rt_burn_mmbtu",
+                    "burn_variance_mmbtu",
                     "heat_rate",
-                    "outcome",
-                    "operator_id",
-                    "load_id",
-                    "notes",
+                    "heat_rate_config",
+                    "net_revenue",
                 )
                 if rows and c in rows[0]
             ]
-            sor_df = pd.DataFrame(rows)
+            # Drop nested raw for table display
+            flat = [{k: v for k, v in r.items() if k != "_lake"} for r in rows]
+            sor_df = pd.DataFrame(flat)
             if display_cols:
-                sor_df = sor_df[display_cols]
+                sor_df = sor_df[[c for c in display_cols if c in sor_df.columns]]
             st.dataframe(sor_df, use_container_width=True, hide_index=True)
             latest = rows[0]
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Latest PCI", str(latest.get("pci_status") or "—"))
-            m2.metric("Latest ETRM", str(latest.get("etrm_status") or "—"))
+            m1.metric("Latest PCI (derived)", str(latest.get("pci_status") or "—"))
+            m2.metric("Unit", str(latest.get("plant_id") or "—")[:28])
             try:
-                m3.metric("Latest variance %", f"{float(latest.get('variance_pct') or 0):+.2f}%")
+                m3.metric("Burn variance %", f"{float(latest.get('variance_pct') or 0):+.2f}%")
             except (TypeError, ValueError):
-                m3.metric("Latest variance %", "—")
-            m4.metric("Latest plant", str(latest.get("plant_id") or "—"))
+                m3.metric("Burn variance %", "—")
+            try:
+                m4.metric("DA burn MMBtu", f"{float(latest.get('da_burn_mmbtu') or 0):,.1f}")
+            except (TypeError, ValueError):
+                m4.metric("DA burn MMBtu", "—")
         else:
-            st.caption("Landing table is empty — submit a live ritual with DEMO_MODE=false to land rows.")
+            st.caption("Lake source returned no rows for this filter.")
     elif sor.get("skipped"):
-        st.caption(sor.get("message") or "Snowflake SoR not available (configure in Setup).")
+        st.caption(sor.get("message") or "Snowflake lake not available (configure in Setup).")
     else:
-        st.error(sor.get("message") or "Snowflake SoR read failed")
+        st.error(sor.get("message") or "Snowflake lake read failed")
 
     # ── trend ────────────────────────────────────────────────────────────
     if st.session_state.history:
@@ -648,7 +683,7 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                 },
                 {
                     "Consumer": "Compliance / Audit",
-                    "Status": "Session log + Snowflake landing when live",
+                    "Status": "Session log + Snowflake lake ingest (read-only)",
                     "Mode": "Append-only",
                 },
                 {
@@ -672,6 +707,6 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
 
     st.caption(
         "Owned by Generation / Asset Management • Co-developed with Ops + Commercial • "
-        "Trading is consumer, not owner • Session audit + Snowflake SoR landing when live • "
+        "Trading is consumer, not owner • Session audit + Snowflake lake ingest (read-only) • "
         "OpenAlphaOperator hybrid v1 • Spire Reactor gas_burn_update"
     )

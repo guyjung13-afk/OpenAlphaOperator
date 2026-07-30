@@ -87,12 +87,15 @@ INTEGRATIONS: list[dict[str, Any]] = [
     },
     {
         "id": "snowflake",
-        "label": "Snowflake (system of record)",
+        "label": "Snowflake (data lake — read-only ingest)",
         "category": "store",
         "phase": "live",
         "auth_required": True,
         "optional": False,
-        "description": "Account login for streams, dynamic tables, and consumer views. Required for live (non-demo) desk path.",
+        "description": (
+            "Read-only login to the AlphaGen lake (views like V_CALCULATED_GAS_BURN). "
+            "The desk **ingests** commercial truth; it does not write or create objects."
+        ),
         "help_url": "https://docs.snowflake.com/",
         "fields": [
             {"key": "account", "label": "Account", "secret": False, "env": "SNOWFLAKE_ACCOUNT", "default": ""},
@@ -109,21 +112,21 @@ INTEGRATIONS: list[dict[str, Any]] = [
                 "label": "Warehouse",
                 "secret": False,
                 "env": "SNOWFLAKE_WAREHOUSE",
-                "default": "COMPUTE_WH",
+                "default": "ALPHAGEN_WH",
             },
             {
                 "key": "database",
                 "label": "Database",
                 "secret": False,
                 "env": "SNOWFLAKE_DATABASE",
-                "default": "ALPHAGEN_ETRM",
+                "default": "ALPHAGEN",
             },
             {
                 "key": "schema",
                 "label": "Schema",
                 "secret": False,
                 "env": "SNOWFLAKE_SCHEMA",
-                "default": "GOLD",
+                "default": "DBO",
             },
         ],
         "secrets_section": "snowflake",

@@ -1,5 +1,8 @@
 """
-Snowflake connection helpers shared by Setup tests and ritual landing writes.
+Snowflake connection helpers for **read-only lake ingest** (and optional writes).
+
+Product default: the desk **does not write** to Snowflake — it only reads existing
+lake views/tables (see store/lake.py). Writes require explicit SNOWFLAKE_WRITE=true.
 
 Credentials: same load order as dashboard Setup
   st.secrets → .streamlit/secrets.toml → env → defaults
@@ -21,6 +24,11 @@ _PLACEHOLDER_PASSWORDS = frozenset({"", "your_password", "dummy", "placeholder"}
 # Unquoted Snowflake identifiers (simple form)
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
+# AlphaGen lake defaults (read-only desk account)
+_DEFAULT_WAREHOUSE = "ALPHAGEN_WH"
+_DEFAULT_DATABASE = "ALPHAGEN"
+_DEFAULT_SCHEMA = "DBO"
+
 
 def snowflake_settings(
     creds: Optional[dict[str, dict[str, str]]] = None,
@@ -31,14 +39,15 @@ def snowflake_settings(
 
         creds = load_credentials()
     sf = dict(creds.get("snowflake") or {})
+    role = (sf.get("role") or os.getenv("SNOWFLAKE_ROLE") or "").strip()
     return {
         "account": (sf.get("account") or "").strip(),
         "user": (sf.get("user") or "").strip(),
         "password": (sf.get("password") or "").strip(),
-        "warehouse": (sf.get("warehouse") or "COMPUTE_WH").strip() or "COMPUTE_WH",
-        "database": (sf.get("database") or "ALPHAGEN_ETRM").strip() or "ALPHAGEN_ETRM",
-        "schema": (sf.get("schema") or "GOLD").strip() or "GOLD",
-        "role": (os.getenv("SNOWFLAKE_ROLE") or "").strip(),
+        "warehouse": (sf.get("warehouse") or _DEFAULT_WAREHOUSE).strip() or _DEFAULT_WAREHOUSE,
+        "database": (sf.get("database") or _DEFAULT_DATABASE).strip() or _DEFAULT_DATABASE,
+        "schema": (sf.get("schema") or _DEFAULT_SCHEMA).strip() or _DEFAULT_SCHEMA,
+        "role": role,
     }
 
 
@@ -60,34 +69,27 @@ def snowflake_write_enabled(
     creds: Optional[dict[str, dict[str, str]]] = None,
 ) -> bool:
     """
-    Whether the ritual should attempt a Snowflake landing write.
+    Whether the ritual should attempt a Snowflake landing **write**.
 
-    - Requires configured credentials.
-    - Skipped when demo_mode is on, unless SNOWFLAKE_WRITE=true forces writes.
-    - SNOWFLAKE_WRITE=false always disables writes.
-    - demo_mode source: integrations.is_demo_mode (secrets → env) — same as Setup.
+    Default **OFF** — AlphaGen desk is read-only against the data lake.
+    Only enables when SNOWFLAKE_WRITE=true|1|yes|on **and** credentials look real.
+    (Creating tables / INSERT is out of scope for lake-ingest mode.)
     """
     force = (os.getenv("SNOWFLAKE_WRITE") or "").strip().lower()
-    if force in ("0", "false", "no", "off"):
+    if force not in ("1", "true", "yes", "on"):
         return False
-    if not is_snowflake_configured(creds):
-        return False
-    if force in ("1", "true", "yes", "on"):
-        return True
-    from spire_reactor.config.integrations import is_demo_mode
-
-    return not is_demo_mode(creds)
+    return is_snowflake_configured(creds)
 
 
 def snowflake_read_enabled(
     creds: Optional[dict[str, dict[str, str]]] = None,
 ) -> bool:
     """
-    Whether cockpit / API should attempt Snowflake landing reads.
+    Whether cockpit / API should attempt Snowflake **reads** (lake ingest).
 
     - Requires configured credentials.
-    - Allowed even in demo_mode so desks can verify SoR after live writes.
-    - SNOWFLAKE_READ=false disables; SNOWFLAKE_READ=true forces when configured.
+    - Allowed even in demo_mode so operators can browse the lake.
+    - SNOWFLAKE_READ=false disables; default on when configured.
     """
     force = (os.getenv("SNOWFLAKE_READ") or "").strip().lower()
     if force in ("0", "false", "no", "off"):
@@ -149,10 +151,10 @@ def _quote_ident(name: str, *, kind: str) -> str:
 
 
 def fq_table(table: str, creds: Optional[dict[str, dict[str, str]]] = None) -> str:
-    """Return quoted DATABASE.SCHEMA.TABLE for INSERT targets."""
+    """Return quoted DATABASE.SCHEMA.TABLE for SELECT (or optional INSERT) targets."""
     s = snowflake_settings(creds)
-    db = _quote_ident(s["database"] or "ALPHAGEN_ETRM", kind="database")
-    sch = _quote_ident(s["schema"] or "GOLD", kind="schema")
+    db = _quote_ident(s["database"] or _DEFAULT_DATABASE, kind="database")
+    sch = _quote_ident(s["schema"] or _DEFAULT_SCHEMA, kind="schema")
     tbl = _quote_ident(table, kind="table")
     return f"{db}.{sch}.{tbl}"
 

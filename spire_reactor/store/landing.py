@@ -283,8 +283,12 @@ def insert_operator_burn_update(
         return {
             "ok": False,
             "skipped": True,
-            "reason": "demo_mode",
-            "message": "Snowflake write skipped — demo_mode (set DEMO_MODE=false or SNOWFLAKE_WRITE=true)",
+            "reason": "read_only_lake",
+            "message": (
+                "Snowflake write skipped — desk is read-only lake ingest "
+                "(never set SNOWFLAKE_WRITE unless you have explicit write grants)"
+            ),
+            "mode": "lake_read",
         }
 
     row = _row_from_ritual(public, payload, burn)

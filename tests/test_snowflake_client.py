@@ -41,7 +41,7 @@ def test_configured_with_real_looking_creds(sf_creds):
 
 
 @pytest.mark.unit
-def test_settings_defaults(sf_creds):
+def test_settings_uses_creds_when_present(sf_creds):
     s = snowflake_settings(sf_creds)
     assert s["database"] == "ALPHAGEN_ETRM"
     assert s["schema"] == "GOLD"
@@ -50,28 +50,31 @@ def test_settings_defaults(sf_creds):
 
 
 @pytest.mark.unit
+def test_settings_defaults_are_alphagen_lake():
+    s = snowflake_settings({"snowflake": {"account": "a", "user": "u", "password": "p"}})
+    assert s["warehouse"] == "ALPHAGEN_WH"
+    assert s["database"] == "ALPHAGEN"
+    assert s["schema"] == "DBO"
+
+
+@pytest.mark.unit
 def test_write_disabled_when_not_configured():
     assert snowflake_write_enabled({"snowflake": {}, "app": {"demo_mode": "false"}}) is False
 
 
 @pytest.mark.unit
-def test_write_disabled_in_demo_mode(sf_creds, monkeypatch):
+def test_write_default_off_even_when_configured(sf_creds, monkeypatch):
+    """Product default: read-only lake — no writes unless SNOWFLAKE_WRITE=true."""
     monkeypatch.delenv("SNOWFLAKE_WRITE", raising=False)
-    demo = {**sf_creds, "app": {"demo_mode": "true", "setup_complete": "true"}}
-    assert snowflake_write_enabled(demo) is False
+    live = {**sf_creds, "app": {"demo_mode": "false", "setup_complete": "true"}}
+    assert snowflake_write_enabled(live) is False
+    assert snowflake_write_enabled(sf_creds) is False
 
 
 @pytest.mark.unit
-def test_write_enabled_live_mode(sf_creds, monkeypatch):
-    monkeypatch.delenv("SNOWFLAKE_WRITE", raising=False)
-    assert snowflake_write_enabled(sf_creds) is True
-
-
-@pytest.mark.unit
-def test_write_force_true_overrides_demo(sf_creds, monkeypatch):
+def test_write_only_when_explicitly_forced(sf_creds, monkeypatch):
     monkeypatch.setenv("SNOWFLAKE_WRITE", "true")
-    demo = {**sf_creds, "app": {"demo_mode": "true"}}
-    assert snowflake_write_enabled(demo) is True
+    assert snowflake_write_enabled(sf_creds) is True
 
 
 @pytest.mark.unit
@@ -95,8 +98,26 @@ def test_read_disabled_by_env(sf_creds, monkeypatch):
 
 @pytest.mark.unit
 def test_fq_table_quoted(sf_creds):
+    # sf_creds still use ALPHAGEN_ETRM.GOLD for explicit-cred tests
     assert fq_table("LANDING_OPERATOR_BURN_UPDATE", sf_creds) == (
         '"ALPHAGEN_ETRM"."GOLD"."LANDING_OPERATOR_BURN_UPDATE"'
+    )
+
+
+@pytest.mark.unit
+def test_fq_table_lake_default():
+    creds = {
+        "snowflake": {
+            "account": "a",
+            "user": "u",
+            "password": "p",
+            "warehouse": "ALPHAGEN_WH",
+            "database": "ALPHAGEN",
+            "schema": "DBO",
+        }
+    }
+    assert fq_table("V_CALCULATED_GAS_BURN", creds) == (
+        '"ALPHAGEN"."DBO"."V_CALCULATED_GAS_BURN"'
     )
 
 

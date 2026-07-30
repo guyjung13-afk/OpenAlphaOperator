@@ -91,15 +91,17 @@ def test_insert_skipped_not_configured(ritual_public, ritual_payload, ritual_bur
 
 
 @pytest.mark.unit
-def test_insert_skipped_demo_mode(sf_creds, ritual_public, ritual_payload, ritual_burn, monkeypatch):
+def test_insert_skipped_read_only_lake(
+    sf_creds, ritual_public, ritual_payload, ritual_burn, monkeypatch
+):
     monkeypatch.delenv("SNOWFLAKE_WRITE", raising=False)
-    demo = {**sf_creds, "app": {"demo_mode": "true"}}
+    live = {**sf_creds, "app": {"demo_mode": "false"}}
     out = insert_operator_burn_update(
-        ritual_public, ritual_payload, ritual_burn, creds=demo
+        ritual_public, ritual_payload, ritual_burn, creds=live
     )
     assert out["ok"] is False
     assert out["skipped"] is True
-    assert out["reason"] == "demo_mode"
+    assert out["reason"] == "read_only_lake"
 
 
 @pytest.mark.unit

@@ -158,48 +158,34 @@ Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
 
 ### 3. Ritual landing write (live path)
 
-`gas_burn_update` / operator-update appends a row to **LANDING_OPERATOR_BURN_UPDATE** when:
+**Default: read-only lake ingest.** The desk does **not** write to Snowflake
+(no CREATE/INSERT). It reads existing lake objects such as
+`ALPHAGEN.DBO.V_CALCULATED_GAS_BURN`.
 
-- Snowflake account/user/password are configured (not placeholders), and
-- `DEMO_MODE=false` **or** `SNOWFLAKE_WRITE=true`
+| Concern | Behavior |
+|---------|----------|
+| Snowflake role | Read (`ALPHAGEN_READ`) is enough |
+| Lake source | `SNOWFLAKE_LAKE_SOURCE` (default `V_CALCULATED_GAS_BURN`) |
+| Ritual compute | Local (session audit + optional Redis) |
+| SF write | **Off** unless `SNOWFLAKE_WRITE=true` (not used for AlphaGen desk) |
+| Ritual `mode` | `live-ingest` when lake-configured and write skipped by design |
 
-Optional dual-write maps the same ritual into **STAGING_GAS_BURN** (for the stream/DT path). **Off by default** until gas_m3 unit mapping is real — enable with `SNOWFLAKE_STAGING_WRITE=true`.
+Optional legacy write path (`LANDING_OPERATOR_BURN_UPDATE`) remains in code for
+accounts that *do* have write grants — keep it disabled for this deployment.
 
-Ritual `mode` is **`live` only when landing succeeds**; otherwise `stub` (check the `snowflake` object for skip/fail detail).
+### 4. Cockpit / API lake ingest
 
-Ritual response includes a safe `snowflake` object:
+With Setup credentials, the cockpit **Snowflake lake (read-only)** section loads
+recent calculated gas burn rows. **Prefill from latest** maps a lake row into
+the operator form for a local ritual.
 
-```json
-{
-  "ok": true,
-  "load_id": "…",
-  "landing_table": "ALPHAGEN_ETRM.GOLD.LANDING_OPERATOR_BURN_UPDATE",
-  "staging_written": true,
-  "message": "Landed load_id=…"
-}
-```
-
-Demo mode skips the write (`skipped: true`) so local desks stay offline-safe.
-
-```bash
-# Live write test (needs real creds + DDL applied)
-# DEMO_MODE=false  or  SNOWFLAKE_WRITE=true
-python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
-  --payload "{\"plant_id\":\"LINDA-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750,\"notes\":\"landing check\"}"
-```
-
-### 4. Cockpit / API SoR read
-
-When Snowflake credentials are configured, the Commercial Truth Cockpit shows a
-**Snowflake SoR** section that loads recent landing rows (filterable by plant).
-Reads are allowed even in demo mode so you can verify historical landings.
-
-API (reactor):
+API:
 
 ```bash
 # After: python -m spire_reactor.main --mode api
-curl -s "http://localhost:8000/sor/landing?limit=10"
-curl -s "http://localhost:8000/sor/landing?limit=5&plant_id=LINDA-1"
+curl -s "http://localhost:8000/sor/landing?limit=10"          # lake by default
+curl -s "http://localhost:8000/lake/gas-burn?limit=25"
+curl -s "http://localhost:8000/lake/gas-burn?unit_name=UNIT"
 ```
 
 Disable reads with `SNOWFLAKE_READ=false`.

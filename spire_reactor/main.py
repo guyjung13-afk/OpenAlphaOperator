@@ -283,7 +283,12 @@ def execute_gas_burn_local(
             staging=sf_status.get("staging_written"),
         )
     elif sf_status.get("skipped"):
-        public["mode"] = "stub"
+        # Read-only lake mode is the intended product path — not a failure.
+        reason = str(sf_status.get("reason") or "")
+        if reason in ("read_only_lake", "demo_mode"):
+            public["mode"] = "live-ingest" if reason == "read_only_lake" else "stub"
+        else:
+            public["mode"] = "stub"
         _info(
             "snowflake_landing_skipped",
             reason=sf_status.get("reason"),
@@ -506,12 +511,34 @@ def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
 
 @app.get("/sor/landing")
 def sor_landing(limit: int = 25, plant_id: str | None = None) -> dict[str, Any]:
-    """Read recent LANDING_OPERATOR_BURN_UPDATE rows (system of record)."""
-    from spire_reactor.store.landing import fetch_recent_operator_burns
+    """
+    Desk feed from Snowflake.
 
-    result = fetch_recent_operator_burns(limit=limit, plant_id=plant_id or None)
+    Default: **read-only lake ingest** (V_CALCULATED_GAS_BURN).
+    Optional legacy write-table path only if SNOWFLAKE_SOR_MODE=landing.
+    """
+    mode = (os.getenv("SNOWFLAKE_SOR_MODE") or "lake").strip().lower()
+    if mode in ("landing", "write_table", "operator_burn"):
+        from spire_reactor.store.landing import fetch_recent_operator_burns
+
+        result = fetch_recent_operator_burns(limit=limit, plant_id=plant_id or None)
+    else:
+        from spire_reactor.store.lake import fetch_lake_gas_burn
+
+        result = fetch_lake_gas_burn(limit=limit, unit_name=plant_id or None)
     if result.get("ok") is False and not result.get("skipped"):
-        raise HTTPException(status_code=502, detail=result.get("message") or "SoR read failed")
+        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
+    return result
+
+
+@app.get("/lake/gas-burn")
+def lake_gas_burn(limit: int = 50, unit_name: str | None = None) -> dict[str, Any]:
+    """Explicit read-only lake ingest endpoint."""
+    from spire_reactor.store.lake import fetch_lake_gas_burn
+
+    result = fetch_lake_gas_burn(limit=limit, unit_name=unit_name or None)
+    if result.get("ok") is False and not result.get("skipped"):
+        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
     return result
 
 
