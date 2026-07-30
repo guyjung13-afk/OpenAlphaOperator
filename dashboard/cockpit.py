@@ -2,7 +2,8 @@
 AlphaGen Commercial Truth Cockpit — Desk Operator View (Hybrid v1)
 
 - Governance banner + Five Truths UI (commercial desk framing)
-- Live burn/PCI/ETRM via spire_reactor.trigger_ritual / calculate_gas_burn
+- Lake-grounded envelopes from V_CALCULATED_GAS_BURN (read-only ingest)
+- Unit picker from Snowflake lake + local ritual compute
 - Optional public-feeds prefill (Open-Meteo / synthetic)
 - Append-only session audit + operator acknowledgment
 - Integration status strip → re-open Setup stage
@@ -12,12 +13,18 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from spire_reactor.main import trigger_ritual  # noqa: E402
+from spire_reactor.store.lake import (  # noqa: E402
+    fetch_latest_lake_gas_burn,
+    list_lake_units,
+    session_fields_from_desk,
+    truth_envelopes_from_desk,
+)
 
 from dashboard.setup_stage import render_integration_status_strip
 
@@ -26,6 +33,7 @@ DEFAULT_PLANT = os.getenv("DEMO_PLANT_ID", "Linda 1 (Gas)")
 DEFAULT_OPERATOR = os.getenv("DEMO_OPERATOR", "Desk Operator")
 DEFAULT_SHIFT = os.getenv("DEMO_SHIFT", "Day")
 LAKE_LABEL = os.getenv("SNOWFLAKE_LAKE_SOURCE", "V_CALCULATED_GAS_BURN")
+MANUAL_UNIT = "— Manual plant id —"
 
 
 def _init_state() -> None:
@@ -54,6 +62,13 @@ def _init_state() -> None:
     st.session_state.feed_meta = None
     st.session_state.last_snowflake = None
     st.session_state.sor_cache = None
+    # Lake-driven desk
+    st.session_state.lake_units = None  # list[str] | None = not loaded yet
+    st.session_state.lake_units_msg = ""
+    st.session_state.lake_truth_row = None  # latest desk row for selected unit
+    st.session_state.truth_source = "demo"  # "lake" | "demo" | "ritual"
+    st.session_state.unit_picker = MANUAL_UNIT
+    st.session_state._last_loaded_unit = None
 
 
 def truth_card(
@@ -94,7 +109,7 @@ def demo_envelopes(
     deviation_pct: float,
 ) -> dict[str, Any]:
     """
-    Light demo coupling: envelopes move with award / PCI band.
+    Fallback envelopes when lake is unavailable.
     Explicitly illustrative — not SCADA or bid guidance.
     """
     derate = {"GREEN": 0.0, "AMBER": 0.03, "RED": 0.08}.get(pci_status, 0.02)
@@ -111,6 +126,7 @@ def demo_envelopes(
     rel_full = max(70, round(94 - derate * 80 - stress * 50, 0))
     prob_derate = min(25, round(6 + derate * 100 + stress * 80, 0))
     return {
+        "source": "demo",
         "p50": int(p50),
         "p90": int(p90),
         "p99": int(p99),
@@ -123,7 +139,125 @@ def demo_envelopes(
         "rel_full": int(rel_full),
         "prob_derate": int(prob_derate),
         "heat_rate": heat_rate,
+        "dam_mw": award_mw,
+        "rt_mw": 0.0,
     }
+
+
+def ensure_lake_units(*, force: bool = False) -> list[str]:
+    """Load distinct lake units once per session (or on force refresh)."""
+    if not force and st.session_state.lake_units is not None:
+        return list(st.session_state.lake_units or [])
+    try:
+        result = list_lake_units(limit=200)
+        if result.get("ok"):
+            st.session_state.lake_units = list(result.get("units") or [])
+            st.session_state.lake_units_msg = result.get("message") or "ok"
+        else:
+            st.session_state.lake_units = []
+            st.session_state.lake_units_msg = result.get("message") or "unavailable"
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.lake_units = []
+        st.session_state.lake_units_msg = str(exc)[:160]
+    return list(st.session_state.lake_units or [])
+
+
+def apply_lake_desk_to_session(desk: dict[str, Any], *, as_truth: bool = True) -> None:
+    """Push lake desk row into operator form + optional truth source flag."""
+    fields = session_fields_from_desk(desk)
+    if not fields:
+        return
+    if fields.get("plant_id"):
+        st.session_state.plant_id = fields["plant_id"]
+    st.session_state.heat_rate = float(fields.get("heat_rate") or st.session_state.heat_rate)
+    st.session_state.award_mw = float(fields.get("award_mw") or 0.0)
+    st.session_state.actual_burn = float(fields.get("actual_burn") or 0.0)
+    st.session_state.estimated_burn = float(fields.get("estimated_burn") or 0.0)
+    st.session_state.pci_status = str(fields.get("pci_status") or "GREEN")
+    st.session_state.deviation_pct = float(fields.get("deviation_pct") or 0.0)
+    st.session_state.hours = float(fields.get("hours") or 1.0)
+    # Derived ETRM band from PCI (desk convention)
+    pci = st.session_state.pci_status
+    if pci == "GREEN":
+        st.session_state.etrm_status = "COMPLIANT"
+        st.session_state.etrm_action = "NONE"
+    elif pci == "AMBER":
+        st.session_state.etrm_status = "REVIEW"
+        st.session_state.etrm_action = "PROPAGATE_ALERT"
+    else:
+        st.session_state.etrm_status = "BREACH"
+        st.session_state.etrm_action = "PROPAGATE_CRITICAL"
+    note_bits = [
+        f"Lake {LAKE_LABEL}",
+        f"HE={fields.get('he')}",
+        f"date={fields.get('operating_date')}",
+    ]
+    if fields.get("pipeline"):
+        note_bits.append(f"pipe={fields.get('pipeline')}")
+    if fields.get("heat_rate_config"):
+        note_bits.append(str(fields.get("heat_rate_config")))
+    st.session_state.notes = " · ".join(str(b) for b in note_bits if b)
+    st.session_state.lake_truth_row = desk
+    if as_truth:
+        st.session_state.truth_source = "lake"
+
+
+def load_lake_truth_for_unit(unit: str, *, force: bool = False) -> Optional[dict[str, Any]]:
+    """Fetch latest lake row for unit and apply to session."""
+    unit = (unit or "").strip()
+    if not unit or unit == MANUAL_UNIT:
+        return None
+    if (
+        not force
+        and st.session_state.get("_last_loaded_unit") == unit
+        and st.session_state.lake_truth_row
+    ):
+        return st.session_state.lake_truth_row
+    try:
+        result = fetch_latest_lake_gas_burn(unit_name=unit)
+    except Exception:  # noqa: BLE001
+        return None
+    if not result.get("ok") or not result.get("row"):
+        st.session_state.lake_truth_row = None
+        return None
+    desk = result["row"]
+    apply_lake_desk_to_session(desk, as_truth=True)
+    st.session_state._last_loaded_unit = unit
+    st.session_state.sor_cache = None  # force lake table refresh later
+    return desk
+
+
+def resolve_truth_envelopes() -> dict[str, Any]:
+    """
+    Prefer lake envelopes when a desk row is loaded.
+    After an operator ritual, keep session-driven envelopes until ↻ Truths reloads lake.
+    """
+    src = st.session_state.get("truth_source") or "demo"
+    if src == "ritual":
+        env = demo_envelopes(
+            st.session_state.award_mw,
+            st.session_state.heat_rate,
+            st.session_state.pci_status,
+            st.session_state.deviation_pct,
+        )
+        env["source"] = "ritual"
+        return env
+
+    desk = st.session_state.lake_truth_row
+    if isinstance(desk, dict) and desk:
+        env = truth_envelopes_from_desk(desk)
+        if env.get("source") == "lake":
+            st.session_state.truth_source = "lake"
+            return env
+
+    env = demo_envelopes(
+        st.session_state.award_mw,
+        st.session_state.heat_rate,
+        st.session_state.pci_status,
+        st.session_state.deviation_pct,
+    )
+    st.session_state.truth_source = "demo"
+    return env
 
 
 def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
@@ -141,7 +275,9 @@ def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
     st.session_state.actual_burn = float(inputs["actual_burn"])
     st.session_state.notes = str(inputs.get("notes") or "")
     st.session_state.last_snowflake = result.get("snowflake")
-    # Invalidate lake cache after ritual (local audit only; no SF write)
+    # Ritual judgment layers on top of lake facts for this session
+    st.session_state.truth_source = "ritual"
+    # Invalidate lake table cache (local audit only; no SF write)
     st.session_state.sor_cache = None
 
     snapshot = {
@@ -185,7 +321,59 @@ def render_cockpit() -> None:
     # ── sidebar ──────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("Shift context")
-        st.session_state.plant_id = st.text_input("Plant", st.session_state.plant_id)
+
+        units = ensure_lake_units()
+        unit_options = [MANUAL_UNIT] + units
+        # Keep picker aligned with plant_id when plant is a known unit
+        if st.session_state.plant_id in units:
+            st.session_state.unit_picker = st.session_state.plant_id
+        elif st.session_state.unit_picker not in unit_options:
+            st.session_state.unit_picker = MANUAL_UNIT
+
+        picker_idx = (
+            unit_options.index(st.session_state.unit_picker)
+            if st.session_state.unit_picker in unit_options
+            else 0
+        )
+        chosen = st.selectbox(
+            "Unit (lake)",
+            unit_options,
+            index=picker_idx,
+            help=f"Units from {LAKE_LABEL}. Selecting a unit loads latest lake HE into Five Truths.",
+        )
+        st.session_state.unit_picker = chosen
+
+        col_u1, col_u2 = st.columns(2)
+        with col_u1:
+            refresh_units = st.button("↻ Units", use_container_width=True)
+        with col_u2:
+            reload_truth = st.button("↻ Truths", use_container_width=True)
+
+        if refresh_units:
+            ensure_lake_units(force=True)
+            st.rerun()
+
+        if chosen != MANUAL_UNIT:
+            st.session_state.plant_id = chosen
+            if (
+                reload_truth
+                or st.session_state.get("_last_loaded_unit") != chosen
+                or st.session_state.lake_truth_row is None
+            ):
+                load_lake_truth_for_unit(chosen, force=reload_truth)
+            st.caption(
+                f"{len(units)} lake unit(s). "
+                f"{st.session_state.lake_units_msg or ''}".strip()
+            )
+        else:
+            st.session_state.plant_id = st.text_input(
+                "Plant (manual)",
+                st.session_state.plant_id
+                if st.session_state.plant_id != MANUAL_UNIT
+                else DEFAULT_PLANT,
+            )
+            st.caption("Manual mode — Five Truths fall back to demo envelopes unless you prefill lake.")
+
         st.session_state.operator = st.text_input("Operator", st.session_state.operator)
         st.session_state.shift = st.selectbox(
             "Shift",
@@ -197,11 +385,24 @@ def render_cockpit() -> None:
         st.markdown("---")
         render_integration_status_strip()
         st.markdown("---")
+        src = st.session_state.get("truth_source") or "demo"
         st.caption(
-            "Hybrid v1: live burn/PCI/ETRM from Spire Reactor. "
-            "Five Truths envelopes are **demo-coupled** (not SCADA). "
-            "Public feeds optional. Snowflake = read-only lake ingest (no writes)."
+            f"Truth source: **{src}**. Lake ingest read-only (`{LAKE_LABEL}`). "
+            "Rituals compute locally + session audit. No Snowflake writes."
         )
+
+    # ── Auto-pick first lake unit on first successful unit load ──────────
+    if (
+        st.session_state.lake_units
+        and st.session_state.unit_picker == MANUAL_UNIT
+        and st.session_state.plant_id == DEFAULT_PLANT
+        and st.session_state.lake_truth_row is None
+    ):
+        first = st.session_state.lake_units[0]
+        st.session_state.unit_picker = first
+        st.session_state.plant_id = first
+        load_lake_truth_for_unit(first, force=True)
+        st.rerun()
 
     # ── governance header ────────────────────────────────────────────────
     st.markdown(
@@ -209,30 +410,35 @@ def render_cockpit() -> None:
 <div style="background-color:#1a1a2e; padding:12px; border-radius:8px; margin-bottom:16px;">
 <b>⚖️ GOVERNED DECISION SUPPORT — GENERATION / ASSET MANAGEMENT</b><br>
 Advisory only. No bids generated. No bid prices recommended.
-Operator acknowledgment required. Session audit always; Snowflake LANDING when live.
+Operator acknowledgment required. Session audit always; Snowflake lake <b>read-only ingest</b>.
 </div>
 """,
         unsafe_allow_html=True,
     )
 
     st.title("Commercial Truth Cockpit — Desk Operator View")
+    truth_src = st.session_state.get("truth_source") or "demo"
+    lake_meta = st.session_state.lake_truth_row or {}
+    he_note = ""
+    if lake_meta:
+        he_note = f" | Lake HE {lake_meta.get('he')} @ {lake_meta.get('operating_date')}"
     st.caption(
         f"Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
-        f"Plant: {st.session_state.plant_id} | Shift: {st.session_state.shift} | "
-        f"Operator: {st.session_state.operator}"
+        f"Unit: {st.session_state.plant_id} | Shift: {st.session_state.shift} | "
+        f"Operator: {st.session_state.operator} | Truths: **{truth_src}**{he_note}"
     )
 
-    # ── live PCI / ETRM strip (Spire-backed) ──────────────────────────────
+    # ── live PCI / ETRM strip ─────────────────────────────────────────────
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("PCI band", st.session_state.pci_status)
     c2.metric("ETRM", st.session_state.etrm_status)
     c3.metric("Variance %", f"{st.session_state.deviation_pct:+.2f}%")
-    c4.metric("Est. burn (MMBtu)", f"{st.session_state.estimated_burn:,.0f}")
+    c4.metric("DA / est. burn (MMBtu)", f"{st.session_state.estimated_burn:,.0f}")
     c5.metric(
         "Last ritual",
         st.session_state.last_ritual.strftime("%H:%M:%S")
         if st.session_state.last_ritual
-        else "—",
+        else ("lake" if truth_src == "lake" else "—"),
     )
 
     # ── operator inputs ──────────────────────────────────────────────────
@@ -384,72 +590,86 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                 )
                 st.rerun()
 
-    # ── five commercial truths (demo envelopes, input-coupled) ───────────
+    # ── five commercial truths (lake-grounded when available) ────────────
     st.divider()
     st.subheader("Five Commercial Truths — Confidence-Weighted Operating Envelopes")
-    st.caption(
-        "Demo envelopes derived from award / PCI band / variance — **illustrative only**. "
-        "Not SCADA, not failure prediction, not bid prices. Desk guidance bands for PoC."
-    )
 
-    env = demo_envelopes(
-        st.session_state.award_mw,
-        st.session_state.heat_rate,
-        st.session_state.pci_status,
-        st.session_state.deviation_pct,
-    )
+    env = resolve_truth_envelopes()
+    env_src = str(env.get("source") or st.session_state.get("truth_source") or "demo")
+    tag = "Lake" if env_src == "lake" else ("Ritual" if env_src == "ritual" else "Demo")
+    if env_src == "lake":
+        st.caption(
+            f"Grounded in **{LAKE_LABEL}** for unit `{env.get('unit_name') or st.session_state.plant_id}` "
+            f"(HE={env.get('he')}, date={env.get('operating_date')}, "
+            f"DAM={env.get('dam_mw')}, RT={env.get('rt_mw')}, HR={env.get('heat_rate')}). "
+            "Advisory envelopes only — not SCADA setpoints, not bids."
+        )
+    elif env_src == "ritual":
+        st.caption(
+            "Envelopes follow the **last local ritual** (operator judgment on form inputs). "
+            "Re-select a lake unit or hit ↻ Truths to re-anchor from the data lake."
+        )
+    else:
+        st.caption(
+            "Demo envelopes (lake unavailable or manual plant). "
+            "Configure Snowflake in Setup and pick a lake unit for live commercial truth."
+        )
+
     accent = band_color(st.session_state.pci_status)
+    dam_lbl = env.get("dam_mw", st.session_state.award_mw)
+    nameplate = env.get("nameplate_mw") or env.get("eco_max_mw") or dam_lbl
 
     r1c1, r1c2 = st.columns(2)
     with r1c1:
         truth_card(
-            "1. Available MW (Operating Envelope) · Demo",
+            f"1. Available MW (Operating Envelope) · {tag}",
             f"P50: {env['p50']} MW | P90: {env['p90']} MW | P99: {env['p99']} MW",
             f"Band {st.session_state.pci_status}",
-            f"Tied to award {st.session_state.award_mw:.0f} MW + PCI stress",
-            "Probability-informed envelope vs static nameplate. Desk still declares a single number — now band-aware. Illustrative PoC coupling only.",
+            f"DAM {float(dam_lbl or 0):.0f} MW · eco/config ~{float(nameplate or 0):.0f} MW · PCI stress",
+            "Envelope from lake DAM award / eco max / config when available, stressed by burn variance. "
+            "Desk still declares a single number — now lake-aware. Not a bid.",
             accent if st.session_state.pci_status == "GREEN" else "#22c55e",
         )
     with r1c2:
         truth_card(
-            "2. Ramp Capability (Next 6h) · Demo",
+            f"2. Ramp Capability (Next 6h) · {tag}",
             f"Normal: {env['ramp_full']} MW/min → Desk guidance band: {env['ramp_desk']} MW/min",
             "High" if st.session_state.pci_status == "GREEN" else "Watch",
-            "Tightens when PCI AMBER/RED or variance rises",
-            "Advisory envelope for commitment planning — not a control setpoint and not a bid. Operator retains full capability judgment.",
+            f"RT {float(env.get('rt_mw') or 0):.1f} vs DAM {float(dam_lbl or 0):.0f}; tightens on variance",
+            "Advisory envelope for commitment planning — not a control setpoint and not a bid. "
+            "Stress from lake RT gap and PCI/variance when lake-sourced.",
             "#eab308" if st.session_state.pci_status != "GREEN" else "#22c55e",
         )
 
     r2c1, r2c2 = st.columns(2)
     with r2c1:
         truth_card(
-            "3. Start Capability (Probability) · Demo",
+            f"3. Start Capability (Probability) · {tag}",
             f"Hot start (next 12h): {env['start_12']}% | Next 36h: {env['start_36']}%",
-            "Medium-High",
-            "Demo: penalized when burn variance elevated",
-            "Commercial start confidence stub. Helps decide how hard to lean on starts vs keeping unit warm. Not a failure prediction model.",
+            "Medium-High" if st.session_state.pci_status == "GREEN" else "Watch",
+            "Penalized when lake burn variance / PCI elevated",
+            "Commercial start confidence. Helps decide starts vs warm. Not a failure prediction model.",
             "#3b82f6",
         )
     with r2c2:
         truth_card(
-            "4. Minimum Commercial Load · Demo",
+            f"4. Minimum Commercial Load · {tag}",
             f"Nominal: {env['min_nom']} MW → Desk guidance (P95-style): {env['min_p95']} MW",
             "High",
-            "Rises with PCI stress (demo rule)",
-            "Turndown confidence band for negative-price hours. Advisory only — no automatic offer or price recommendation.",
+            f"~28% of config/nameplate ({float(env.get('config_mw') or nameplate or 0):.0f} MW) + PCI stress",
+            "Turndown confidence band for negative-price hours. Advisory only — no automatic offer.",
             "#a855f7",
         )
 
     truth_card(
-        "5. Expected Reliability (7-day horizon) · Demo · Differentiator",
+        f"5. Expected Reliability (horizon) · {tag} · Differentiator",
         f"Run hours at full capability: {env['rel_full']}% | Prob >25 MW derate: {env['prob_derate']}%",
         "Elevated but manageable"
         if st.session_state.pci_status != "RED"
-        else "Stressed — review notes",
-        "NOT failure prediction · Commercial reliability framing",
-        "Probability of forced derate, run-hour loss, or start shortfall as a **commercial** signal. "
-        "Operators may shade with traders, pull maintenance, or align outage timing. "
-        "Fleet-scale inference is roadmap — this card is a desk PoC envelope only.",
+        else "Stressed — review lake variance / notes",
+        "NOT failure prediction · Commercial reliability framing from lake PCI/variance",
+        "Probability of forced derate or run-hour loss as a **commercial** signal from live burn variance. "
+        "Operators may shade with traders or pull maintenance. Fleet-scale inference remains roadmap.",
         "#ef4444" if st.session_state.pci_status == "RED" else "#f97316",
     )
 
@@ -495,7 +715,15 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                 )
                 st.rerun()
     else:
-        st.warning("No operator update yet this shift. Submit inputs above to seed the truths.")
+        if st.session_state.lake_truth_row:
+            st.info(
+                "Lake truths are loaded for this unit. Submit a ritual only if you want an "
+                "operator-acknowledged judgment on top of the lake facts."
+            )
+        else:
+            st.warning(
+                "No lake unit or operator update yet. Pick a unit in the sidebar or submit inputs."
+            )
 
     if st.session_state.audit:
         st.markdown("**Audit trail (append-only, this session)**")
@@ -533,8 +761,8 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
     with lake_c2:
         filter_plant = st.checkbox(
             "Filter unit",
-            value=False,
-            help="When on, only rows for the sidebar plant_id / unit name are loaded.",
+            value=st.session_state.unit_picker != MANUAL_UNIT,
+            help="When on, only rows for the sidebar unit are loaded.",
         )
     with lake_c3:
         prefill_from_lake = st.button("Prefill from latest", use_container_width=True)
@@ -569,25 +797,17 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
     sor = st.session_state.sor_cache or {}
     if prefill_from_lake and sor.get("ok") and (sor.get("rows") or []):
         latest_pre = (sor.get("rows") or [None])[0] or {}
-        if latest_pre.get("plant_id"):
-            st.session_state.plant_id = str(latest_pre["plant_id"])
-        if latest_pre.get("heat_rate"):
-            st.session_state.heat_rate = float(latest_pre["heat_rate"])
-        if latest_pre.get("award_mw") is not None:
-            st.session_state.award_mw = float(latest_pre["award_mw"])
-        if latest_pre.get("actual_burn_mmbtu") is not None:
-            st.session_state.actual_burn = float(latest_pre["actual_burn_mmbtu"])
-        if latest_pre.get("estimated_burn_mmbtu") is not None:
-            st.session_state.estimated_burn = float(latest_pre["estimated_burn_mmbtu"])
-        if latest_pre.get("pci_status"):
-            st.session_state.pci_status = str(latest_pre["pci_status"])
-        if latest_pre.get("variance_pct") is not None:
-            st.session_state.deviation_pct = float(latest_pre["variance_pct"])
+        apply_lake_desk_to_session(latest_pre, as_truth=True)
+        if latest_pre.get("plant_id") and latest_pre["plant_id"] in (
+            st.session_state.lake_units or []
+        ):
+            st.session_state.unit_picker = str(latest_pre["plant_id"])
+        st.session_state._last_loaded_unit = str(latest_pre.get("plant_id") or "")
         st.success(
-            f"Prefill from lake unit `{latest_pre.get('plant_id')}` "
-            f"(HE={latest_pre.get('he')}, date={latest_pre.get('operating_date')}). "
-            "Review and submit a local ritual if needed."
+            f"Five Truths + form prefilled from lake unit `{latest_pre.get('plant_id')}` "
+            f"(HE={latest_pre.get('he')}, date={latest_pre.get('operating_date')})."
         )
+        st.rerun()
 
     if sor.get("ok"):
         rows = sor.get("rows") or []
@@ -697,9 +917,9 @@ Operator acknowledgment required. Session audit always; Snowflake LANDING when l
                     "Mode": "demo or live",
                 },
                 {
-                    "Consumer": "Snowflake LANDING_OPERATOR_BURN_UPDATE",
-                    "Status": "Write on live ritual; cockpit read when configured",
-                    "Mode": "System of record",
+                    "Consumer": f"Snowflake {LAKE_LABEL}",
+                    "Status": "Read-only lake ingest → Five Truths",
+                    "Mode": "Ingest",
                 },
             ]
         )

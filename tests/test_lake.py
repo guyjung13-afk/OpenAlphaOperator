@@ -51,3 +51,46 @@ def test_map_lake_row_to_desk():
     payload = map_lake_row_to_ritual_payload(desk)
     assert payload["plant_id"] == desk["plant_id"]
     assert payload["award_mw"] == 509.0
+
+
+@pytest.mark.unit
+def test_truth_envelopes_from_desk_lake_sourced():
+    from spire_reactor.store.lake import (
+        session_fields_from_desk,
+        truth_envelopes_from_desk,
+    )
+
+    desk = map_lake_row_to_desk(
+        {
+            "UNIT_NAME": "PS BERGEN 2CC F",
+            "FLEET_NAME": "BERGEN",
+            "PIPELINE": "TRANSCO",
+            "OPERATING_DATE": "2026-07-29",
+            "HE": 10,
+            "DAM_MW": 400.0,
+            "RT_MW": 380.0,
+            "HEAT_RATE": 7.1,
+            "HEAT_RATE_CONFIG": "2x1",
+            "DA_BURN_MMBTU": 2800.0,
+            "RT_BURN_MMBTU": 2750.0,
+            "BURN_VARIANCE_MMBTU": -50.0,
+            "CONFIG_MW": 450.0,
+            "ECO_MAX_RT_MW": 500.0,
+        }
+    )
+    # attach raw for eco/config
+    desk["_lake"] = {
+        "config_mw": 450.0,
+        "eco_max_rt_mw": 500.0,
+    }
+    env = truth_envelopes_from_desk(desk)
+    assert env["source"] == "lake"
+    assert env["p50"] > 0
+    assert env["p90"] <= env["p50"] + 50  # stressed ≤ roughly base
+    assert env["dam_mw"] == 400.0
+    assert env["nameplate_mw"] == 500.0
+    assert env["unit_name"] == "PS BERGEN 2CC F"
+    fields = session_fields_from_desk(desk)
+    assert fields["plant_id"] == "PS BERGEN 2CC F"
+    assert fields["award_mw"] == 400.0
+    assert fields["heat_rate"] == 7.1

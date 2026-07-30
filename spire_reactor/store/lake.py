@@ -194,6 +194,130 @@ def map_lake_row_to_ritual_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _lake_raw(desk: dict[str, Any]) -> dict[str, Any]:
+    raw = desk.get("_lake")
+    return raw if isinstance(raw, dict) else {}
+
+
+def session_fields_from_desk(desk: dict[str, Any]) -> dict[str, Any]:
+    """
+    Fields to push into Streamlit session / operator form from a lake desk row.
+    Pure — no Streamlit dependency.
+    """
+    if not desk:
+        return {}
+    # Ensure normalized
+    if "da_burn_mmbtu" not in desk and any(str(k).isupper() for k in desk):
+        desk = map_lake_row_to_desk(desk)
+    return {
+        "plant_id": str(desk.get("plant_id") or desk.get("unit_name") or ""),
+        "heat_rate": _as_float(desk.get("heat_rate"), 7.5) or 7.5,
+        "award_mw": _as_float(desk.get("award_mw"), 0.0),
+        "actual_burn": _as_float(
+            desk.get("actual_burn_mmbtu")
+            if desk.get("actual_burn_mmbtu") is not None
+            else desk.get("da_burn_mmbtu"),
+            0.0,
+        ),
+        "estimated_burn": _as_float(desk.get("estimated_burn_mmbtu") or desk.get("da_burn_mmbtu"), 0.0),
+        "pci_status": str(desk.get("pci_status") or "GREEN"),
+        "deviation_pct": _as_float(desk.get("variance_pct"), 0.0),
+        "hours": 1.0,
+        "notes": str(desk.get("notes") or ""),
+        "fleet_name": desk.get("fleet_name"),
+        "pipeline": desk.get("pipeline"),
+        "operating_date": desk.get("operating_date"),
+        "he": desk.get("he"),
+        "rt_mw": _as_float(desk.get("rt_mw"), 0.0),
+        "da_burn_mmbtu": _as_float(desk.get("da_burn_mmbtu"), 0.0),
+        "rt_burn_mmbtu": _as_float(desk.get("rt_burn_mmbtu"), 0.0),
+        "heat_rate_config": desk.get("heat_rate_config"),
+        "net_revenue": desk.get("net_revenue"),
+    }
+
+
+def truth_envelopes_from_desk(desk: dict[str, Any]) -> dict[str, Any]:
+    """
+    Five Commercial Truths envelopes **grounded in lake facts**.
+
+    Uses DAM award, eco max / config MW, RT observation, heat rate, and
+    burn variance stress. Still advisory desk framing — not SCADA setpoints
+    or bid guidance — but no longer pure demo invent.
+    """
+    if not desk:
+        return {"source": "empty"}
+    if "da_burn_mmbtu" not in desk and any(str(k).isupper() for k in desk):
+        desk = map_lake_row_to_desk(desk)
+
+    raw = _lake_raw(desk)
+    dam = _as_float(desk.get("award_mw"), 0.0)
+    rt_mw = _as_float(desk.get("rt_mw"), 0.0)
+    config_mw = _as_float(raw.get("config_mw") or raw.get("CONFIG_MW"), 0.0)
+    eco_max = _as_float(raw.get("eco_max_rt_mw") or raw.get("ECO_MAX_RT_MW"), 0.0)
+    heat_rate = _as_float(desk.get("heat_rate"), 7.5) or 7.5
+    variance_pct = _as_float(desk.get("variance_pct"), 0.0)
+    pci = str(desk.get("pci_status") or pci_band_from_variance(variance_pct))
+
+    # Stress 0..0.15 from variance magnitude and PCI band
+    stress = min(abs(variance_pct) / 100.0, 0.15)
+    band_derate = {"GREEN": 0.0, "AMBER": 0.04, "RED": 0.10}.get(pci, 0.03)
+
+    # Operating envelope: lake nameplate / eco / DAM
+    nameplate = eco_max or config_mw or max(dam, abs(rt_mw), 100.0)
+    base = dam if dam > 0 else (config_mw if config_mw > 0 else nameplate * 0.75)
+    p50 = max(0, int(round(base * (1.0 - band_derate * 0.25))))
+    p90 = max(0, int(round(base * (0.96 - band_derate - stress * 0.4))))
+    p99 = max(0, int(round(min(nameplate, base) * (0.92 - band_derate - stress * 0.6))))
+
+    # Ramp: tighten when RT far from DAM or variance high
+    rt_gap = abs(rt_mw - dam) / dam if dam > 1e-6 else abs(rt_mw) / max(nameplate, 1.0)
+    ramp_full = 7.5
+    ramp_desk = round(ramp_full * (1.0 - band_derate - stress * 0.5 - min(rt_gap, 0.2) * 0.3), 1)
+    ramp_desk = max(1.0, ramp_desk)
+
+    start_12 = max(70, int(round(96 - band_derate * 120 - stress * 50)))
+    start_36 = max(65, int(round(start_12 - 5 - stress * 10)))
+
+    # Min commercial load: ~25–35% of config under stress
+    min_nom = int(round((config_mw or nameplate) * 0.28)) if (config_mw or nameplate) else 185
+    min_p95 = int(round(min_nom * (1.0 + band_derate + stress * 0.5)))
+
+    rel_full = max(55, int(round(94 - band_derate * 100 - stress * 60)))
+    prob_derate = min(40, int(round(5 + band_derate * 120 + stress * 100)))
+
+    return {
+        "source": "lake",
+        "p50": p50,
+        "p90": p90,
+        "p99": p99,
+        "ramp_full": ramp_full,
+        "ramp_desk": ramp_desk,
+        "start_12": start_12,
+        "start_36": start_36,
+        "min_nom": min_nom,
+        "min_p95": min_p95,
+        "rel_full": rel_full,
+        "prob_derate": prob_derate,
+        "heat_rate": heat_rate,
+        "nameplate_mw": nameplate,
+        "dam_mw": dam,
+        "rt_mw": rt_mw,
+        "config_mw": config_mw,
+        "eco_max_mw": eco_max,
+        "pci_status": pci,
+        "variance_pct": variance_pct,
+        "unit_name": desk.get("plant_id") or desk.get("unit_name"),
+        "fleet_name": desk.get("fleet_name"),
+        "pipeline": desk.get("pipeline"),
+        "operating_date": desk.get("operating_date"),
+        "he": desk.get("he"),
+        "heat_rate_config": desk.get("heat_rate_config"),
+        "da_burn_mmbtu": _as_float(desk.get("da_burn_mmbtu"), 0.0),
+        "rt_burn_mmbtu": _as_float(desk.get("rt_burn_mmbtu"), 0.0),
+        "net_revenue": desk.get("net_revenue"),
+    }
+
+
 def fetch_lake_gas_burn(
     limit: int = 50,
     unit_name: Optional[str] = None,
