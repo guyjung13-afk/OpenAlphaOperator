@@ -32,7 +32,22 @@ OPEN_METEO_URL = os.getenv(
     "OPEN_METEO_URL",
     "https://api.open-meteo.com/v1/forecast",
 )
-EIA_API_KEY = os.getenv("EIA_API_KEY", "").strip()
+# Prefer Setup-stage secrets / shared loader; fall back to env at call time.
+def _resolve_eia_api_key(override: Optional[str] = None) -> str:
+    if override is not None and str(override).strip():
+        return str(override).strip()
+    try:
+        from spire_reactor.config.integrations import get_eia_api_key
+
+        key = get_eia_api_key()
+        if key:
+            return key
+    except Exception:  # noqa: BLE001 — keep ingest usable without config package
+        pass
+    return os.getenv("EIA_API_KEY", "").strip()
+
+
+EIA_API_KEY = os.getenv("EIA_API_KEY", "").strip()  # legacy module default; prefer _resolve_eia_api_key
 EIA_BASE = "https://api.eia.gov/v2"
 # Henry Hub natural gas spot price series (daily); requires free EIA key
 EIA_NG_SERIES = os.getenv("EIA_NG_SERIES", "natural-gas/pri/fut/data")
@@ -99,7 +114,7 @@ def fetch_eia_natural_gas_price(
     Latest EIA natural-gas related price point when EIA_API_KEY is set.
     Without a key, returns ok=False and a fixed demo price so rituals still run.
     """
-    key = (api_key if api_key is not None else EIA_API_KEY).strip()
+    key = _resolve_eia_api_key(api_key if api_key is not None else None)
     if not key:
         return {
             "source": "eia",
