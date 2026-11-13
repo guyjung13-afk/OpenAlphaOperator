@@ -399,7 +399,7 @@ def health() -> dict[str, Any]:
         "demo": demo,
         "demo_env": DEMO_MODE,
         "redis_url": REDIS_URL,
-        "public_feeds": ["open-meteo", "eia"],
+        "public_feeds": ["open-meteo", "eia", "ercot", "pjm"],
         "temporal_configured": temporal_cfg,
         "temporal_dispatch_enabled": temporal_dispatch,
     }
@@ -438,12 +438,21 @@ def ritual_dispatch(body: RitualRequest) -> dict[str, Any]:
 
 @app.get("/ingest/snapshot")
 def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
-    """Pull public feeds (Open-Meteo ± EIA) or offline synthetic tick."""
+    """Public feeds, or an explicitly labeled offline synthetic tick."""
     from spire_reactor.ingest.public_feeds import fetch_demo_snapshot, synthetic_tick
 
     if synthetic:
-        return synthetic_tick()
-    return fetch_demo_snapshot()
+        snap = synthetic_tick()
+        snap["label"] = "synthetic"
+        return snap
+    snap = fetch_demo_snapshot()
+    try:
+        from spire_reactor.ingest.desk_pull import collect_public_desk
+
+        snap["desk"] = collect_public_desk()
+    except Exception as exc:  # noqa: BLE001 — snapshot still returns weather/EIA
+        snap["desk"] = {"ok": False, "error": f"source unavailable: {exc}"}
+    return snap
 
 
 @app.post("/ingest/demo-ritual")
