@@ -16,8 +16,7 @@ numpy>=1.26.0,<3.0
 streamlit>=1.40.0,<2.0
 plotly>=5.24.0,<6.0
 
-# Snowflake + orchestration
-snowflake-connector-python>=3.12.0,<4.0
+# Orchestration
 temporalio>=1.7.0,<2.0
 
 # Logging

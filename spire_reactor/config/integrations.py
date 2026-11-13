@@ -86,53 +86,6 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "test": "test_redis",
     },
     {
-        "id": "snowflake",
-        "label": "Snowflake (data lake — read-only ingest)",
-        "category": "store",
-        "phase": "live",
-        "auth_required": True,
-        "optional": False,
-        "description": (
-            "Read-only login to the AlphaGen lake (views like V_CALCULATED_GAS_BURN). "
-            "The desk **ingests** commercial truth; it does not write or create objects."
-        ),
-        "help_url": "https://docs.snowflake.com/",
-        "fields": [
-            {"key": "account", "label": "Account", "secret": False, "env": "SNOWFLAKE_ACCOUNT", "default": ""},
-            {"key": "user", "label": "User", "secret": False, "env": "SNOWFLAKE_USER", "default": ""},
-            {
-                "key": "password",
-                "label": "Password",
-                "secret": True,
-                "env": "SNOWFLAKE_PASSWORD",
-                "default": "",
-            },
-            {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "secret": False,
-                "env": "SNOWFLAKE_WAREHOUSE",
-                "default": "ALPHAGEN_WH",
-            },
-            {
-                "key": "database",
-                "label": "Database",
-                "secret": False,
-                "env": "SNOWFLAKE_DATABASE",
-                "default": "ALPHAGEN",
-            },
-            {
-                "key": "schema",
-                "label": "Schema",
-                "secret": False,
-                "env": "SNOWFLAKE_SCHEMA",
-                "default": "DBO",
-            },
-        ],
-        "secrets_section": "snowflake",
-        "test": "test_snowflake",
-    },
-    {
         "id": "temporal",
         "label": "Temporal (durable rituals)",
         "category": "orchestrate",
@@ -397,7 +350,6 @@ def write_secrets(
       {
         "app": {"demo_mode": True, "setup_complete": True},
         "eia": {"api_key": "..."},
-        "snowflake": {"account": "...", ...},
       }
     Empty secret fields are omitted so operators can leave blanks to keep env-only.
     """

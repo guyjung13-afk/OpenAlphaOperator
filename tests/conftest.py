@@ -17,16 +17,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     keys = [
         "DEMO_MODE",
         "SETUP_COMPLETE",
-        "SNOWFLAKE_ACCOUNT",
-        "SNOWFLAKE_USER",
-        "SNOWFLAKE_PASSWORD",
-        "SNOWFLAKE_WAREHOUSE",
-        "SNOWFLAKE_DATABASE",
-        "SNOWFLAKE_SCHEMA",
-        "SNOWFLAKE_ROLE",
-        "SNOWFLAKE_WRITE",
-        "SNOWFLAKE_READ",
-        "SNOWFLAKE_STAGING_WRITE",
         "TEMPORAL_HOST",
         "TEMPORAL_NAMESPACE",
         "TEMPORAL_API_KEY",
@@ -44,22 +34,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # Default demo on for tests unless a case overrides
     monkeypatch.setenv("DEMO_MODE", "true")
     yield
-
-
-@pytest.fixture
-def sf_creds() -> dict[str, dict[str, str]]:
-    """Realistic-looking (fake) Snowflake credentials for gate tests."""
-    return {
-        "snowflake": {
-            "account": "xy12345.us-east-1",
-            "user": "operator_bot",
-            "password": "s3cret-not-real",
-            "warehouse": "COMPUTE_WH",
-            "database": "ALPHAGEN_ETRM",
-            "schema": "GOLD",
-        },
-        "app": {"demo_mode": "false", "setup_complete": "true"},
-    }
 
 
 @pytest.fixture

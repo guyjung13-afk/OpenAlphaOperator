@@ -5,11 +5,6 @@ sovereign-gas-burn-pci-etrm/
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
-├── sql/
-│   ├── 01_base_ingestion_stream.sql
-│   ├── 02_pci_dynamic_table.sql
-│   ├── 03_etrm_fusion_view.sql
-│   └── 04_propagation_task.sql
 ├── spire_reactor/
 │   ├── __init__.py
 │   ├── main.py
@@ -17,11 +12,8 @@ sovereign-gas-burn-pci-etrm/
 │   │   └── pci_etrm_ritual.py
 │   ├── activities/
 │   │   └── fusion.py
-│   └── config/
-│       └── snowflake_creds.env.example
-├── scripts/
-│   ├── migrate_consumers.sh
-│   └── test_operator_update.py
+│   └── ingest/
+│       └── public_feeds.py
 ├── docs/
 │   ├── PCI_Pipelines_Integration.md
 │   └── ETRM_Model_Mapping.md

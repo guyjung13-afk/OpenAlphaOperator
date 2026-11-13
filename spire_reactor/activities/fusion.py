@@ -2,11 +2,10 @@
 Temporal activity: PCI + ETRM fusion / downstream propagation.
 
 Steps (best-effort, never raises unless totally broken):
-  1. Load latest SoR context (Snowflake landing when available)
-  2. Rule-based fusion action from PCI/ETRM band
-  3. Optional xAI insight text (skipped if no key)
-  4. Redis cache latest_pci_etrm + publish fusion channel
-  5. Optional downstream webhook
+  1. Rule-based fusion action from PCI/ETRM band
+  2. Optional xAI insight text (skipped if no key)
+  3. Redis cache latest_pci_etrm + publish fusion channel
+  4. Optional downstream webhook
 """
 
 from __future__ import annotations
@@ -182,29 +181,6 @@ def _webhook_post(fusion_payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "skipped": False, "message": str(exc)[:200]}
 
 
-def _sor_context(public: dict[str, Any]) -> dict[str, Any]:
-    """Optional latest landing row for the plant (read path)."""
-    plant = str(public.get("plant_id") or "").strip() or None
-    try:
-        from spire_reactor.store.landing import fetch_latest_operator_burn
-
-        latest = fetch_latest_operator_burn(plant_id=plant)
-        if latest.get("ok") and latest.get("row"):
-            return {
-                "ok": True,
-                "skipped": False,
-                "row": latest["row"],
-                "message": latest.get("message"),
-            }
-        return {
-            "ok": False,
-            "skipped": bool(latest.get("skipped")),
-            "message": latest.get("message") or "no row",
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "skipped": False, "message": str(exc)[:200]}
-
-
 @activity.defn(name="fuse_pci_etrm")
 async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
     """
@@ -221,7 +197,6 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
 
     base = _rule_fusion(public)
     insight = _optional_xai_insight(public, base)
-    sor = _sor_context(public)
 
     fusion_payload = {
         "event": "operator_update_fusion",
@@ -238,7 +213,6 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
         "severity": insight.get("severity"),
         "source": insight.get("source"),
         "ritual_at": public.get("ritual_at"),
-        "snowflake": public.get("snowflake"),
         "mode": public.get("mode"),
         "workflow_step": "fuse_pci_etrm",
     }
@@ -263,14 +237,6 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
         "redis": redis_status,
         "webhook": webhook_status,
         "xai": insight.get("xai"),
-        "sor": {
-            "ok": sor.get("ok"),
-            "skipped": sor.get("skipped"),
-            "message": sor.get("message"),
-            # do not dump full row into every consumer — summary only
-            "load_id": (sor.get("row") or {}).get("load_id") if sor.get("row") else None,
-            "pci_status": (sor.get("row") or {}).get("pci_status") if sor.get("row") else None,
-        },
         "fused_at": fusion_payload["fused_at"],
     }
     activity.logger.info(

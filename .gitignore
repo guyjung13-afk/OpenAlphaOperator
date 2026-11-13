@@ -44,7 +44,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
-spire_reactor/config/snowflake_creds.env
 
 # Local test / temp files
 test_success.py

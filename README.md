@@ -1,7 +1,8 @@
 # OpenAlphaOperator
 
-**Sovereign Gas Burn PCI + ETRM Reactor**  
-Replaces the legacy Excel burn sheet + Power Automate chain with a deterministic operator ritual, Snowflake dynamic tables, and a live Streamlit dashboard.
+**Real Time Desk** — a Streamlit operator demo that runs on public data only.
+
+The desk computes a deterministic gas-burn PCI / ETRM ritual from public feeds. Current connectors are Open-Meteo and optional EIA Open Data. Later public connectors (not in this tree yet) are FERC, PJM, and ERCOT.
 
 ## Layout
 
@@ -20,22 +21,31 @@ OpenAlphaOperator/
 │   └── deploy.yml          # optional compose deploy (tags / manual)
 ├── dashboard/
 │   ├── app.py              # entry: Setup gate → Cockpit
-│   ├── setup_stage.py      # connect real-time integration logins
-│   └── cockpit.py          # Commercial Truth Cockpit
+│   ├── setup_stage.py      # connect optional public-feed logins
+│   └── cockpit.py          # Real Time Desk
 ├── spire_reactor/
-│   ├── main.py             # FastAPI + ritual engine (api | worker | trigger)
+│   ├── main.py             # FastAPI + ritual engine (api | worker | trigger | ingest)
 │   ├── config/
 │   │   ├── integrations.py # catalog + secrets/env loader
-│   │   └── connectors.py   # connection tests (Snowflake, EIA, Redis, …)
+│   │   └── connectors.py   # connection tests (Open-Meteo, EIA, Redis, …)
 │   ├── ingest/             # public feeds
-│   ├── store/              # Snowflake landing (SoR write/read)
 │   ├── temporal/           # client, settings, worker
 │   ├── workflows/          # PCI_ETRM_Operator_Update
 │   └── activities/         # compute_and_land + fuse_pci_etrm
-├── tests/                  # unit tests (no live Snowflake/Temporal)
-├── sql/                    # Landing DDL, streams, DTs, tasks
-└── scripts/
+└── tests/                  # unit tests (no live Temporal)
 ```
+
+## Public data
+
+`spire_reactor/ingest/public_feeds.py` is the only data path:
+
+| Source | Login | What it supplies |
+|--------|--------|------------------|
+| **Open-Meteo** | No | Weather → synthetic plant load / burn |
+| **EIA Open Data** | Optional free API key | Natural gas price when configured |
+| **Synthetic tick** | No | Offline / CI fallback (no network) |
+
+Those fields map into the same `gas_burn_update` ritual payload as the operator form. The desk does not call a private warehouse or a private plant feed.
 
 ## Tests & CI
 
@@ -73,12 +83,11 @@ On first launch the dashboard opens **Setup — Connect real-time integrations**
 | **Open-Meteo** | No | Weather prefill |
 | **EIA Open Data** | Optional API key | Free: https://www.eia.gov/opendata/ |
 | **Redis** | Usually no (local) | URL; password in URL if needed |
-| **Snowflake** | Yes (account / user / password) | Required for live (non-demo) path |
 | **Temporal** | Optional host (+ Cloud API key) | Durable `PCI_ETRM_Operator_Update` |
 | **Webhooks / xAI** | Optional | Fusion notify + optional AI text |
 
 - **Demo only** — continue with zero logins (synthetic + Open-Meteo).
-- **Live integrations** — enter Snowflake (and optional EIA/Redis), **Test connection**, **Save credentials**.
+- **Live integrations** — enter optional EIA / Redis / Temporal, **Test connection**, **Save credentials**.
 - Saves to **`.streamlit/secrets.toml`** (gitignored). Docker uses **`.env`** with the same key names.
 - From the cockpit sidebar, use **Open Setup** to reconfigure anytime.
 
@@ -91,7 +100,7 @@ copy .streamlit\secrets.toml.example .streamlit\secrets.toml   # Windows
 ## Quick start (reactor API + Redis)
 
 ```bash
-cp .env.example .env   # then fill Snowflake / EIA if needed
+cp .env.example .env   # EIA_API_KEY is optional
 
 # host-side API (optional; Compose default image runs Streamlit)
 python -m spire_reactor.main --mode api
@@ -108,7 +117,7 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update --payload "
 # temporal server start-dev   # separate terminal, host localhost:7233
 # python -m spire_reactor.main --mode temporal
 
-# Public feeds demo (Open-Meteo; optional EIA_API_KEY) → gas burn ritual
+# Public feeds (Open-Meteo; optional EIA_API_KEY) → gas burn ritual
 python -m spire_reactor.main --mode ingest
 python -m spire_reactor.main --mode ingest --synthetic   # offline / CI
 python -m spire_reactor.main --mode ingest --no-ritual   # snapshot only
@@ -121,82 +130,28 @@ docker compose --profile full up -d --build
 docker compose --profile temporal up -d --build
 ```
 
-### Public feeds (PoC instead of Snowflake)
-
-`spire_reactor/ingest/public_feeds.py` pulls:
-
-- **Open-Meteo** (no key) — weather → synthetic plant load / burn
-- **EIA** (optional key via Setup secrets or `EIA_API_KEY`) — natural gas price when configured
-- **Synthetic tick** — air-gapped / CI
-
-Maps into the same `gas_burn_update` ritual payload as the operator form. Snowflake stays the live system-of-record path.
-
-### Ritual stub (demo)
+### Ritual example
 
 ```bash
 curl -s -X POST http://localhost:8000/ritual/operator-update \
   -H "Content-Type: application/json" \
-  -d "{\"plant_id\":\"DEMO-1\",\"award_mmbtu\":1200,\"actual_burn_mmbtu\":1185,\"heat_rate\":8.45,\"notes\":\"shift check\"}"
+  -d "{\"plant_id\":\"DEMO-PUBLIC-1\",\"award_mmbtu\":1200,\"actual_burn_mmbtu\":1185,\"heat_rate\":8.45,\"notes\":\"shift check\"}"
 ```
 
-## Snowflake
-
-### 1. Apply DDL (Snowsight)
-
-Run in order against your target database/schema (defaults: `ALPHAGEN_ETRM.GOLD`):
-
-1. `sql/00_landing_operator_burn.sql` — **LANDING_OPERATOR_BURN_UPDATE** + **STAGING_GAS_BURN**
-2. `sql/01_base_ingestion_stream.sql` — stream on staging
-3. `sql/02_pci_dynamic_table.sql`
-4. `sql/03_etrm_fusion_view.sql`
-5. `sql/04_propagation_task.sql`
-
-### 2. Credentials
-
-Configure via **Dashboard Setup** (secrets.toml) or `.env` (see `.env.example`).  
-Legacy path: `spire_reactor/config/snowflake_creds.env.example`.
-
-### 3. Ritual landing write (live path)
-
-**Default: read-only lake ingest.** The desk does **not** write to Snowflake
-(no CREATE/INSERT). It reads existing lake objects such as
-`ALPHAGEN.DBO.V_CALCULATED_GAS_BURN`.
-
-| Concern | Behavior |
-|---------|----------|
-| Snowflake role | Read (`ALPHAGEN_READ`) is enough |
-| Lake source | `SNOWFLAKE_LAKE_SOURCE` (default `V_CALCULATED_GAS_BURN`) |
-| Ritual compute | Local (session audit + optional Redis) |
-| SF write | **Off** unless `SNOWFLAKE_WRITE=true` (not used for AlphaGen desk) |
-| Ritual `mode` | `live-ingest` when lake-configured and write skipped by design |
-
-Optional legacy write path (`LANDING_OPERATOR_BURN_UPDATE`) remains in code for
-accounts that *do* have write grants — keep it disabled for this deployment.
-
-### 4. Cockpit / API lake ingest
-
-With Setup credentials, the cockpit **Snowflake lake (read-only)** section loads
-recent calculated gas burn rows. **Prefill from latest** maps a lake row into
-the operator form for a local ritual.
-
-API:
+Public snapshot and a one-shot ritual from the same feeds:
 
 ```bash
-# After: python -m spire_reactor.main --mode api
-curl -s "http://localhost:8000/sor/landing?limit=10"          # lake by default
-curl -s "http://localhost:8000/lake/gas-burn?limit=25"
-curl -s "http://localhost:8000/lake/gas-burn?unit_name=UNIT"
+curl -s "http://localhost:8000/ingest/snapshot"
+curl -s -X POST "http://localhost:8000/ingest/demo-ritual?synthetic=true"
 ```
 
-Disable reads with `SNOWFLAKE_READ=false`.
-
-## Temporal (durable PCI / ETRM)
+## Temporal (optional durable ritual)
 
 When Temporal is configured and dispatch is enabled, `gas_burn_update` starts
 workflow **`PCI_ETRM_Operator_Update`** instead of running only in-process:
 
-1. **Activity** `compute_and_land_gas_burn` — burn math + Snowflake landing + Redis  
-2. **Activity** `fuse_pci_etrm` — rule-based (optional xAI) insight, Redis, optional webhook  
+1. **Activity** `compute_and_land_gas_burn` — burn math + Redis publish
+2. **Activity** `fuse_pci_etrm` — rule-based (optional xAI) insight, Redis, optional webhook
 
 | Gate | Behavior |
 |------|----------|
@@ -207,33 +162,25 @@ workflow **`PCI_ETRM_Operator_Update`** instead of running only in-process:
 | Worker down / start fails | **Falls back to local** ritual (`temporal_fallback` on response) |
 
 ```bash
-# 1) Temporal frontend (example local)
 temporal server start-dev
 
-# 2) Worker
 export TEMPORAL_HOST=localhost:7233
 export TEMPORAL_USE=true
 python -m spire_reactor.main --mode temporal
 
-# 3) Trigger (another shell) — waits for workflow result
 python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
-  --payload "{\"plant_id\":\"LINDA-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750}"
+  --payload "{\"plant_id\":\"DEMO-PUBLIC-1\",\"heat_rate\":7.5,\"award_mw\":500,\"actual_burn_mmbtu\":3750}"
 ```
-
-Setup stage: **Temporal**, **webhooks**, and **xAI** are live optional integrations with connection tests.
 
 ## Status
 
 | Layer | State |
 |-------|--------|
-| Setup stage | Guided logins + connection tests (Snowflake, EIA, Redis); Phase 2 slots |
-| Streamlit dashboard | Commercial Truth Cockpit (hybrid v1); Spire rituals + demo envelopes |
+| Setup stage | Optional logins + connection tests (Open-Meteo, EIA, Redis, Temporal) |
+| Streamlit dashboard | Real Time Desk on public feeds |
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
-| Public feeds ingest | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
+| Public feeds | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
-| Snowflake landing | Ritual → `LANDING_OPERATOR_BURN_UPDATE` (+ optional staging dual-write) |
-| Snowflake SoR read | Cockpit table + `GET /sor/landing` when credentials configured |
-| Snowflake SQL | Landing DDL + stream/DT/task scripts; apply in Snowsight |
 | Temporal fusion | `PCI_ETRM_Operator_Update` workflow + worker (`--mode temporal`) |
 
 ## Security
@@ -244,5 +191,3 @@ Setup stage: **Temporal**, **webhooks**, and **xAI** are live optional integrati
 - Secrets are never written to ritual payloads or the session audit trail
 - Container runs as non-root `appuser`
 - Interactive desk = secrets.toml; headless API / Docker = env injection
-
-Built for Guy Jung · OpenAlpha / Sovereign stack

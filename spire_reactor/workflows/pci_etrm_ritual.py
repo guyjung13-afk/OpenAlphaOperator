@@ -2,7 +2,7 @@
 Durable PCI + ETRM operator-update workflow.
 
 Steps:
-  1. compute_and_land_gas_burn — math + Snowflake landing + redis publish
+  1. compute_and_land_gas_burn — math + redis publish
   2. fuse_pci_etrm — fusion insight, redis, optional webhook / xAI
 """
 
@@ -57,9 +57,4 @@ class PCIEtrmRitual:
             if c not in consumers:
                 consumers.append(c)
         out["consumers"] = consumers
-        if out.get("mode") != "live" and (public.get("snowflake") or {}).get("ok"):
-            out["mode"] = "live"
-        if fusion.get("ok") and out.get("mode") == "stub":
-            # Durable path ran even without SF land
-            out["mode"] = out.get("mode") or "stub"
         return out

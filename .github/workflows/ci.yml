@@ -41,14 +41,13 @@ jobs:
         env:
           # Hard-disable live side effects in CI
           DEMO_MODE: "true"
-          SNOWFLAKE_WRITE: "false"
           TEMPORAL_USE: "false"
         run: |
           pytest tests -m "unit or not integration" --cov=spire_reactor --cov-report=term-missing
 
       - name: Import smoke (packages load)
         run: |
-          python -c "from spire_reactor.store import landing, snowflake_client"
+          python -c "from spire_reactor.ingest import public_feeds"
           python -c "from spire_reactor.temporal import settings"
           python -c "from spire_reactor.activities import fusion"
           python -c "from spire_reactor.config import integrations"

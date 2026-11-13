@@ -118,7 +118,7 @@ Demo mode needs <b>zero</b> logins.
 
     st.title("Connect real-time integrations")
     st.caption(
-        "Open-Meteo needs no login. Snowflake is required for live SoR. "
+        "Open-Meteo needs no login. EIA is optional. "
         "Temporal, webhooks, and xAI are optional (durable fusion / notify / AI text)."
     )
 
@@ -129,7 +129,7 @@ Demo mode needs <b>zero</b> logins.
         ["Demo only (no logins required)", "Live integrations"],
         index=0 if demo_default else 1,
         horizontal=True,
-        help="Demo uses public feeds + synthetic math. Live expects Snowflake for system-of-record.",
+        help="Demo uses public feeds + synthetic math. Live saves optional EIA, Redis, and Temporal logins.",
     )
     want_demo = mode.startswith("Demo")
 
@@ -268,31 +268,19 @@ Demo mode needs <b>zero</b> logins.
             st.rerun()
 
     with a3:
-        skip_sf = st.checkbox(
-            "Skip Snowflake for now",
-            value=want_demo,
-            help="Allow entering the desk without a green Snowflake test (demo paths).",
-        )
         continue_label = "Continue to desk (demo)" if want_demo else "Continue to desk"
         if st.button(continue_label, use_container_width=True):
-            snow_ok = (results.get("snowflake") or {}).get("ok") is True
-            if not want_demo and not snow_ok and not skip_sf:
-                st.error(
-                    "Live mode requires a green Snowflake connection test, "
-                    "or check “Skip Snowflake for now”."
-                )
-            else:
-                # Mark session as past setup even if not persisted
-                st.session_state.setup_dismissed = True
-                st.session_state.show_setup = False
-                st.session_state.force_setup = False
-                if want_demo:
-                    st.session_state.demo_session = True
-                st.rerun()
+            # Mark session as past setup even if not persisted
+            st.session_state.setup_dismissed = True
+            st.session_state.show_setup = False
+            st.session_state.force_setup = False
+            if want_demo:
+                st.session_state.demo_session = True
+            st.rerun()
 
     st.caption(
         f"Secrets file: `{secrets_path()}` · "
-        "Docker/prod: inject the same keys via `.env` (`SNOWFLAKE_*`, `EIA_API_KEY`, `REDIS_URL`)."
+        "Docker/prod: inject the same keys via `.env` (`EIA_API_KEY`, `REDIS_URL`)."
     )
 
 

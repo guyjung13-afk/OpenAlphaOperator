@@ -186,7 +186,7 @@ def execute_gas_burn_local(
     via_temporal: bool = False,
 ) -> dict[str, Any]:
     """
-    Deterministic gas_burn_update: math → optional Snowflake land → Redis publish.
+    Deterministic gas_burn_update: math → Redis publish.
 
     via_temporal=True marks orchestrator metadata for activities (no re-dispatch).
     """
@@ -256,51 +256,6 @@ def execute_gas_burn_local(
         "result": burn,
         "orchestrator": "temporal-activity" if via_temporal else "local",
     }
-    try:
-        from spire_reactor.store.landing import insert_operator_burn_update
-
-        sf_status = insert_operator_burn_update(public, payload, burn)
-    except Exception as exc:  # noqa: BLE001
-        sf_status = {
-            "ok": False,
-            "skipped": False,
-            "message": f"Snowflake landing error: {exc}",
-        }
-    public["snowflake"] = sf_status
-    if sf_status.get("ok"):
-        public["mode"] = "live"
-        consumers = list(public.get("consumers") or [])
-        landing = sf_status.get("landing_table") or "LANDING_OPERATOR_BURN_UPDATE"
-        if landing not in consumers:
-            consumers.append(landing)
-        if sf_status.get("staging_written"):
-            consumers.append("STAGING_GAS_BURN")
-        public["consumers"] = consumers
-        _info(
-            "snowflake_landing_ok",
-            load_id=sf_status.get("load_id"),
-            table=sf_status.get("landing_table"),
-            staging=sf_status.get("staging_written"),
-        )
-    elif sf_status.get("skipped"):
-        # Read-only lake mode is the intended product path — not a failure.
-        reason = str(sf_status.get("reason") or "")
-        if reason in ("read_only_lake", "demo_mode"):
-            public["mode"] = "live-ingest" if reason == "read_only_lake" else "stub"
-        else:
-            public["mode"] = "stub"
-        _info(
-            "snowflake_landing_skipped",
-            reason=sf_status.get("reason"),
-            message=sf_status.get("message"),
-        )
-    else:
-        public["mode"] = "stub"
-        _error(
-            "snowflake_landing_failed",
-            message=sf_status.get("message"),
-            load_id=sf_status.get("load_id"),
-        )
     publish_ritual_result("ritual_results", public)
     return public
 
@@ -315,7 +270,7 @@ def trigger_ritual(
 
     gas_burn_update:
       - When Temporal is configured + enabled → durable PCI_ETRM_Operator_Update
-      - Else local execute_gas_burn_local (math + SoR + Redis)
+      - Else local execute_gas_burn_local (math + Redis)
     """
     payload = dict(payload or {})
     canonical = _RITUAL_ALIASES.get(ritual_type, ritual_type)
@@ -424,23 +379,8 @@ class RitualRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    snowflake_cfg = False
-    snowflake_write = False
-    snowflake_read = False
     temporal_cfg = False
     temporal_dispatch = False
-    try:
-        from spire_reactor.store.snowflake_client import (
-            is_snowflake_configured,
-            snowflake_read_enabled,
-            snowflake_write_enabled,
-        )
-
-        snowflake_cfg = is_snowflake_configured()
-        snowflake_write = snowflake_write_enabled()
-        snowflake_read = snowflake_read_enabled()
-    except Exception:  # noqa: BLE001
-        pass
     try:
         from spire_reactor.temporal.settings import (
             is_temporal_configured,
@@ -459,9 +399,7 @@ def health() -> dict[str, Any]:
         "demo": demo,
         "demo_env": DEMO_MODE,
         "redis_url": REDIS_URL,
-        "snowflake_configured": snowflake_cfg,
-        "snowflake_write_enabled": snowflake_write,
-        "snowflake_read_enabled": snowflake_read,
+        "public_feeds": ["open-meteo", "eia"],
         "temporal_configured": temporal_cfg,
         "temporal_dispatch_enabled": temporal_dispatch,
     }
@@ -477,7 +415,6 @@ def root() -> dict[str, str]:
         "dispatch": "POST /ritual",
         "ingest_snapshot": "GET /ingest/snapshot",
         "ingest_ritual": "POST /ingest/demo-ritual",
-        "sor_landing": "GET /sor/landing",
     }
 
 
@@ -507,39 +444,6 @@ def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
     if synthetic:
         return synthetic_tick()
     return fetch_demo_snapshot()
-
-
-@app.get("/sor/landing")
-def sor_landing(limit: int = 25, plant_id: str | None = None) -> dict[str, Any]:
-    """
-    Desk feed from Snowflake.
-
-    Default: **read-only lake ingest** (V_CALCULATED_GAS_BURN).
-    Optional legacy write-table path only if SNOWFLAKE_SOR_MODE=landing.
-    """
-    mode = (os.getenv("SNOWFLAKE_SOR_MODE") or "lake").strip().lower()
-    if mode in ("landing", "write_table", "operator_burn"):
-        from spire_reactor.store.landing import fetch_recent_operator_burns
-
-        result = fetch_recent_operator_burns(limit=limit, plant_id=plant_id or None)
-    else:
-        from spire_reactor.store.lake import fetch_lake_gas_burn
-
-        result = fetch_lake_gas_burn(limit=limit, unit_name=plant_id or None)
-    if result.get("ok") is False and not result.get("skipped"):
-        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
-    return result
-
-
-@app.get("/lake/gas-burn")
-def lake_gas_burn(limit: int = 50, unit_name: str | None = None) -> dict[str, Any]:
-    """Explicit read-only lake ingest endpoint."""
-    from spire_reactor.store.lake import fetch_lake_gas_burn
-
-    result = fetch_lake_gas_burn(limit=limit, unit_name=unit_name or None)
-    if result.get("ok") is False and not result.get("skipped"):
-        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
-    return result
 
 
 @app.post("/ingest/demo-ritual")

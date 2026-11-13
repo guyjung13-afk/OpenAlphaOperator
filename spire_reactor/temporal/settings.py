@@ -58,7 +58,7 @@ def temporal_dispatch_enabled(
     - Requires TEMPORAL_HOST (Setup/env).
     - TEMPORAL_USE=false always disables.
     - TEMPORAL_USE=true forces when configured.
-    - Otherwise: enabled when not demo_mode (same gate as Snowflake writes).
+    - Otherwise: enabled when not demo_mode.
     """
     force = (os.getenv("TEMPORAL_USE") or "").strip().lower()
     if force in ("0", "false", "no", "off"):
