@@ -109,6 +109,76 @@ def _redis_url_with_password(url: str, password: str = "") -> str:
     )
 
 
+def test_ercot(**_: Any) -> dict[str, Any]:
+    """Public ERCOT hub prices. No key."""
+    t0 = time.perf_counter()
+    try:
+        from spire_reactor.ingest.ercot_lmp import fetch_ercot_lmp
+
+        result = fetch_ercot_lmp()
+        ms = (time.perf_counter() - t0) * 1000
+        if result.get("ok"):
+            return _result("ercot", True, str(result.get("message") or "OK"), ms)
+        return _result("ercot", False, str(result.get("message") or "source unavailable"), ms)
+    except Exception as exc:  # noqa: BLE001
+        ms = (time.perf_counter() - t0) * 1000
+        return _result("ercot", False, f"source unavailable: {exc}", ms)
+
+
+def test_pjm(api_key: str = "", **_: Any) -> dict[str, Any]:
+    """PJM hub LMPs. Optional key. Never echoes the key."""
+    t0 = time.perf_counter()
+    key = (api_key or "").strip()
+    if not key:
+        ms = (time.perf_counter() - t0) * 1000
+        return _result(
+            "pjm",
+            False,
+            "No API key — optional; desk shows source unavailable",
+            ms,
+            skipped=True,
+        )
+    try:
+        from spire_reactor.ingest.pjm_lmp import fetch_pjm_lmp
+
+        result = fetch_pjm_lmp(api_key=key)
+        ms = (time.perf_counter() - t0) * 1000
+        message = str(result.get("message") or "")
+        if key in message:
+            message = message.replace(key, "••••")
+        if result.get("ok"):
+            return _result("pjm", True, message or "OK", ms)
+        return _result("pjm", False, message or "source unavailable", ms)
+    except Exception as exc:  # noqa: BLE001
+        ms = (time.perf_counter() - t0) * 1000
+        text = str(exc).replace(key, "••••")
+        return _result("pjm", False, f"source unavailable: {text}", ms)
+
+
+def test_ollama(host: str = "", model: str = "", **_: Any) -> dict[str, Any]:
+    """Local Ollama reachability. The desk hides the query panel when this fails."""
+    t0 = time.perf_counter()
+    try:
+        from spire_reactor.model.ollama_desk import probe_ollama
+
+        result = probe_ollama(host.strip() or None)
+        ms = (time.perf_counter() - t0) * 1000
+        label = (model or "").strip()
+        if result.get("ok"):
+            extra = f" · model {label}" if label else ""
+            return _result("ollama", True, f"{result.get('message')}{extra}", ms)
+        return _result(
+            "ollama",
+            False,
+            str(result.get("message") or "source unavailable"),
+            ms,
+            skipped=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        ms = (time.perf_counter() - t0) * 1000
+        return _result("ollama", False, f"source unavailable: {exc}", ms, skipped=True)
+
+
 def test_redis(url: str = "redis://localhost:6379/0", password: str = "", **_: Any) -> dict[str, Any]:
     """PING Redis."""
     t0 = time.perf_counter()
@@ -290,6 +360,9 @@ def test_xai(api_key: str = "", **_: Any) -> dict[str, Any]:
 _TESTERS: dict[str, Callable[..., dict[str, Any]]] = {
     "test_open_meteo": test_open_meteo,
     "test_eia": test_eia,
+    "test_ercot": test_ercot,
+    "test_pjm": test_pjm,
+    "test_ollama": test_ollama,
     "test_redis": test_redis,
     "test_temporal": test_temporal,
     "test_webhooks": test_webhooks,

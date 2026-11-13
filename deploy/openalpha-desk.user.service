@@ -1,0 +1,29 @@
+# User unit for the Real Time Desk. No root.
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/openalpha-desk.user.service ~/.config/systemd/user/openalpha-desk.service
+#   # edit WorkingDirectory / ExecStart / EnvironmentFile if the clone is elsewhere
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now openalpha-desk.service
+#
+# loginctl enable-linger "$USER"  is optional and may need a login policy;
+# without it the desk stops when the user session ends.
+
+[Unit]
+Description=OpenAlphaOperator Real Time Desk
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/OpenAlphaOperator
+Environment=SETUP_COMPLETE=true
+Environment=DESK_BIND=0.0.0.0
+Environment=DESK_PORT=8501
+Environment=DESK_TIMEZONE=America/Chicago
+EnvironmentFile=-%h/OpenAlphaOperator/.env
+ExecStart=%h/OpenAlphaOperator/scripts/run_dashboard.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
