@@ -1,4 +1,4 @@
-"""Temporal client, settings, and worker for durable PCI/ETRM rituals."""
+"""Temporal client, settings, and worker for durable Scheduling/ETRM rituals."""
 
 from spire_reactor.temporal.settings import (
     is_temporal_configured,

@@ -1,9 +1,9 @@
 """
-Durable PCI + ETRM operator-update workflow.
+Durable Scheduling + ETRM operator-update workflow.
 
 Steps:
   1. compute_and_land_gas_burn — math + redis publish
-  2. fuse_pci_etrm — fusion insight, redis, optional webhook / xAI
+  2. fuse_scheduling_etrm — fusion insight, redis, optional webhook / xAI
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 
-@workflow.defn(name="PCI_ETRM_Operator_Update")
-class PCIEtrmRitual:
+@workflow.defn(name="Scheduling_ETRM_Operator_Update")
+class SchedulingEtrmRitual:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload = dict(payload or {})
@@ -35,7 +35,7 @@ class PCIEtrmRitual:
             }
 
         fusion = await workflow.execute_activity(
-            "fuse_pci_etrm",
+            "fuse_scheduling_etrm",
             public,
             start_to_close_timeout=timedelta(seconds=90),
             retry_policy=RetryPolicy(maximum_attempts=5),
@@ -53,7 +53,7 @@ class PCIEtrmRitual:
         if fusion.get("action"):
             out["etrm_action"] = fusion["action"]
         consumers = list(out.get("consumers") or [])
-        for c in ("Temporal:PCI_ETRM_Operator_Update", "fusion:redis", "fusion:webhook"):
+        for c in ("Temporal:Scheduling_ETRM_Operator_Update", "fusion:redis", "fusion:webhook"):
             if c not in consumers:
                 consumers.append(c)
         out["consumers"] = consumers

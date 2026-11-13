@@ -1,5 +1,5 @@
 """
-Temporal activity: compute gas burn PCI/ETRM and publish the result.
+Temporal activity: compute gas burn Scheduling/ETRM and publish the result.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ async def compute_and_land_gas_burn(payload: dict[str, Any]) -> dict[str, Any]:
 
     result = execute_gas_burn_local(dict(payload or {}), via_temporal=True)
     activity.logger.info(
-        "compute_and_land done mode=%s pci=%s",
+        "compute_and_land done mode=%s scheduling=%s",
         result.get("mode"),
-        result.get("pci_status"),
+        result.get("scheduling_status"),
     )
     return result

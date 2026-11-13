@@ -49,7 +49,7 @@ def ritual_public() -> dict[str, Any]:
         "estimated_burn_mmbtu": 3750.0,
         "deviation_pct": 0.0,
         "new_accum_mmbtu": 3750.0,
-        "pci_status": "GREEN",
+        "scheduling_status": "GREEN",
         "etrm_status": "COMPLIANT",
         "etrm_action": "NONE",
         "outcome": "ALL_DOWNSTREAM_UPDATED",
@@ -80,6 +80,6 @@ def ritual_burn() -> dict[str, Any]:
         "estimated_burn_mmbtu": 3750.0,
         "variance_pct": 0.0,
         "new_accum_mmbtu": 3750.0,
-        "pci_status": "GREEN",
+        "scheduling_status": "GREEN",
         "timestamp": "2026-07-29T15:00:00+00:00",
     }

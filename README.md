@@ -2,7 +2,7 @@
 
 **Real Time Desk** — a Streamlit operator demo that runs on public data only.
 
-The desk computes a deterministic gas-burn PCI / ETRM ritual from public feeds. Current connectors are Open-Meteo and optional EIA Open Data. Later public connectors (not in this tree yet) are FERC, PJM, and ERCOT.
+The desk computes a deterministic gas-burn Scheduling / ETRM ritual from public feeds. Current connectors are Open-Meteo and optional EIA Open Data. Later public connectors (not in this tree yet) are FERC, PJM, and ERCOT.
 
 ## Layout
 
@@ -30,8 +30,8 @@ OpenAlphaOperator/
 │   │   └── connectors.py   # connection tests (Open-Meteo, EIA, Redis, …)
 │   ├── ingest/             # public feeds
 │   ├── temporal/           # client, settings, worker
-│   ├── workflows/          # PCI_ETRM_Operator_Update
-│   └── activities/         # compute_and_land + fuse_pci_etrm
+│   ├── workflows/          # Scheduling_ETRM_Operator_Update
+│   └── activities/         # compute_and_land + fuse_scheduling_etrm
 └── tests/                  # unit tests (no live Temporal)
 ```
 
@@ -83,7 +83,7 @@ On first launch the dashboard opens **Setup — Connect real-time integrations**
 | **Open-Meteo** | No | Weather prefill |
 | **EIA Open Data** | Optional API key | Free: https://www.eia.gov/opendata/ |
 | **Redis** | Usually no (local) | URL; password in URL if needed |
-| **Temporal** | Optional host (+ Cloud API key) | Durable `PCI_ETRM_Operator_Update` |
+| **Temporal** | Optional host (+ Cloud API key) | Durable `Scheduling_ETRM_Operator_Update` |
 | **Webhooks / xAI** | Optional | Fusion notify + optional AI text |
 
 - **Demo only** — continue with zero logins (synthetic + Open-Meteo).
@@ -148,10 +148,10 @@ curl -s -X POST "http://localhost:8000/ingest/demo-ritual?synthetic=true"
 ## Temporal (optional durable ritual)
 
 When Temporal is configured and dispatch is enabled, `gas_burn_update` starts
-workflow **`PCI_ETRM_Operator_Update`** instead of running only in-process:
+workflow **`Scheduling_ETRM_Operator_Update`** instead of running only in-process:
 
 1. **Activity** `compute_and_land_gas_burn` — burn math + Redis publish
-2. **Activity** `fuse_pci_etrm` — rule-based (optional xAI) insight, Redis, optional webhook
+2. **Activity** `fuse_scheduling_etrm` — rule-based (optional xAI) insight, Redis, optional webhook
 
 | Gate | Behavior |
 |------|----------|
@@ -181,7 +181,7 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
 | Public feeds | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
 | Docker / Redis | Compose-ready (redis + dashboard) |
-| Temporal fusion | `PCI_ETRM_Operator_Update` workflow + worker (`--mode temporal`) |
+| Temporal fusion | `Scheduling_ETRM_Operator_Update` workflow + worker (`--mode temporal`) |
 
 ## Security
 

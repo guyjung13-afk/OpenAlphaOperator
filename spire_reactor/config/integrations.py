@@ -71,7 +71,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "phase": "live",
         "auth_required": False,
         "optional": True,
-        "description": "Pub/sub + latest PCI cache. Local Docker has no password; embed password in URL if needed.",
+        "description": "Pub/sub + latest Scheduling cache. Local Docker has no password; embed password in URL if needed.",
         "help_url": None,
         "fields": [
             {
@@ -92,7 +92,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "phase": "live",
         "auth_required": True,
         "optional": True,
-        "description": "Durable PCI_ETRM_Operator_Update workflow. Local: host localhost:7233; Cloud: host + API key + TLS.",
+        "description": "Durable Scheduling_ETRM_Operator_Update workflow. Local: host localhost:7233; Cloud: host + API key + TLS.",
         "help_url": "https://docs.temporal.io/",
         "fields": [
             {
@@ -127,7 +127,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "phase": "live",
         "auth_required": True,
         "optional": True,
-        "description": "Optional fusion notify URL (POST JSON). Used by fuse_pci_etrm activity.",
+        "description": "Optional fusion notify URL (POST JSON). Used by fuse_scheduling_etrm activity.",
         "help_url": None,
         "fields": [
             {

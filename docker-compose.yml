@@ -75,7 +75,7 @@ services:
     restart: unless-stopped
     profiles: ["full"] # start with: docker compose --profile full up
 
-  # Temporal worker — durable PCI_ETRM_Operator_Update
+  # Temporal worker — durable Scheduling_ETRM_Operator_Update
   # Requires TEMPORAL_HOST (local dev server or Temporal Cloud).
   # Local server: temporal server start-dev  → host localhost:7233
   # Start: docker compose --profile temporal up -d --build

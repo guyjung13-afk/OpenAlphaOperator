@@ -23,7 +23,7 @@ from spire_reactor.main import trigger_ritual
 from dashboard.setup_stage import render_integration_status_strip
 
 # ── defaults / identity ──────────────────────────────────────────────
-DEFAULT_PLANT = os.getenv("DEMO_PLANT_ID", "Linda 1 (Gas)")
+DEFAULT_PLANT = os.getenv("DEMO_PLANT_ID", "DEMO-PUBLIC-1")
 DEFAULT_OPERATOR = os.getenv("DEMO_OPERATOR", "Desk Operator")
 DEFAULT_SHIFT = os.getenv("DEMO_SHIFT", "Day")
 
@@ -40,7 +40,7 @@ def _init_state() -> None:
     st.session_state.actual_burn = 3450.0
     st.session_state.notes = "Exhaust spread widening slightly"
     st.session_state.hours = 1.0
-    st.session_state.pci_status = "GREEN"
+    st.session_state.scheduling_status = "GREEN"
     st.session_state.etrm_status = "COMPLIANT"
     st.session_state.etrm_action = "NONE"
     st.session_state.deviation_pct = 0.0
@@ -75,31 +75,31 @@ def _source_badge(src: str) -> str:
     return f'<span class="desk-badge {cls}">{s}</span>'
 
 
-def _pci_badge(pci: str) -> str:
-    p = (pci or "—").upper()
+def _scheduling_badge(scheduling: str) -> str:
+    p = (scheduling or "—").upper()
     cls = {"GREEN": "badge-green", "AMBER": "badge-amber", "RED": "badge-red"}.get(
         p, "badge-demo"
     )
-    return f'<span class="desk-badge {cls}">PCI {p}</span>'
+    return f'<span class="desk-badge {cls}">Scheduling {p}</span>'
 
 
-def band_color(pci_status: str) -> str:
+def band_color(scheduling_status: str) -> str:
     return {"GREEN": "#22c55e", "AMBER": "#eab308", "RED": "#ef4444"}.get(
-        pci_status, "#64748b"
+        scheduling_status, "#64748b"
     )
 
 
 def demo_envelopes(
     award_mw: float,
     heat_rate: float,
-    pci_status: str,
+    scheduling_status: str,
     deviation_pct: float,
 ) -> dict[str, Any]:
     """
     Illustrative envelopes from the operator form.
     Explicitly not SCADA or bid guidance.
     """
-    derate = {"GREEN": 0.0, "AMBER": 0.03, "RED": 0.08}.get(pci_status, 0.02)
+    derate = {"GREEN": 0.0, "AMBER": 0.03, "RED": 0.08}.get(scheduling_status, 0.02)
     stress = min(abs(deviation_pct) / 100.0, 0.12)
     p50 = round(award_mw * (0.86 - derate), 0)
     p90 = round(award_mw * (0.83 - derate - stress * 0.5), 0)
@@ -167,7 +167,7 @@ def resolve_truth_envelopes() -> dict[str, Any]:
     env = demo_envelopes(
         st.session_state.award_mw,
         st.session_state.heat_rate,
-        st.session_state.pci_status,
+        st.session_state.scheduling_status,
         st.session_state.deviation_pct,
     )
     if src in ("public", "ritual"):
@@ -177,7 +177,7 @@ def resolve_truth_envelopes() -> dict[str, Any]:
 
 def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
     burn = result.get("result") or {}
-    st.session_state.pci_status = result.get("pci_status") or burn.get("pci_status", "GREEN")
+    st.session_state.scheduling_status = result.get("scheduling_status") or burn.get("scheduling_status", "GREEN")
     st.session_state.etrm_status = result.get("etrm_status", "COMPLIANT")
     st.session_state.etrm_action = result.get("etrm_action", "NONE")
     st.session_state.deviation_pct = float(result.get("deviation_pct") or 0.0)
@@ -197,7 +197,7 @@ def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
         "award_mw": inputs["award_mw"],
         "actual_burn": inputs["actual_burn"],
         "notes": inputs.get("notes") or "",
-        "pci_status": st.session_state.pci_status,
+        "scheduling_status": st.session_state.scheduling_status,
         "etrm_status": st.session_state.etrm_status,
         "etrm_action": st.session_state.etrm_action,
         "deviation_pct": st.session_state.deviation_pct,
@@ -215,10 +215,10 @@ def apply_ritual_result(result: dict[str, Any], inputs: dict[str, Any]) -> None:
     st.session_state.history.append(
         {
             "time": datetime.now(),
-            "pci": float(inputs["heat_rate"]),
+            "scheduling": float(inputs["heat_rate"]),
             "status": st.session_state.etrm_status,
             "deviation": st.session_state.deviation_pct,
-            "pci_band": st.session_state.pci_status,
+            "scheduling_band": st.session_state.scheduling_status,
         }
     )
 
@@ -273,7 +273,7 @@ def render_cockpit() -> None:
         f"""
         <div class="desk-bar">
           {_source_badge(truth_src)}
-          {_pci_badge(st.session_state.pci_status)}
+          {_scheduling_badge(st.session_state.scheduling_status)}
           <span><span class="muted">Unit</span> <strong>{unit_short}</strong></span>
           <span><span class="muted">Temp</span> <strong>{_fmt(temp, "°C")}</strong></span>
           <span><span class="muted">Wind</span> <strong>{_fmt(wind, " km/h")}</strong></span>
@@ -288,7 +288,7 @@ def render_cockpit() -> None:
 
     r1 = st.columns(4)
     r2 = st.columns(4)
-    r1[0].metric("PCI", st.session_state.pci_status)
+    r1[0].metric("Scheduling", st.session_state.scheduling_status)
     r1[1].metric("ETRM", st.session_state.etrm_status)
     r1[2].metric("Var %", f"{st.session_state.deviation_pct:+.1f}%")
     r1[3].metric("DAM MW", f"{dam:,.0f}")
@@ -306,14 +306,14 @@ def render_cockpit() -> None:
             "1 · Available MW",
             f"P50 {env['p50']} · P90 {env['p90']} · P99 {env['p99']}",
             f"DAM {dam:.0f} · eco/cfg ~{nameplate:.0f}",
-            band_color(st.session_state.pci_status),
+            band_color(st.session_state.scheduling_status),
         )
     with t2:
         truth_tile(
             "2 · Ramp (6h)",
             f"{env['ramp_desk']} MW/min desk",
             f"Base {env['ramp_full']} · RT vs DAM stress",
-            "#eab308" if st.session_state.pci_status != "GREEN" else "#22c55e",
+            "#eab308" if st.session_state.scheduling_status != "GREEN" else "#22c55e",
         )
     with t3:
         truth_tile(
@@ -334,7 +334,7 @@ def render_cockpit() -> None:
             "5 · Reliability",
             f"Full {env['rel_full']}% · >25MW derate {env['prob_derate']}%",
             "Commercial signal from variance",
-            "#ef4444" if st.session_state.pci_status == "RED" else "#f97316",
+            "#ef4444" if st.session_state.scheduling_status == "RED" else "#f97316",
         )
 
     st.markdown("")
@@ -414,7 +414,7 @@ def render_cockpit() -> None:
                 apply_ritual_result(result, inputs)
                 st.session_state.hours = inputs["hours"]
                 st.success(
-                    f"PCI {st.session_state.pci_status} · ETRM {st.session_state.etrm_status} · "
+                    f"Scheduling {st.session_state.scheduling_status} · ETRM {st.session_state.etrm_status} · "
                     f"{st.session_state.deviation_pct:+.2f}% — acknowledge to audit"
                 )
                 st.rerun()
@@ -422,7 +422,7 @@ def render_cockpit() -> None:
         if st.session_state.pending_ack is not None:
             last = st.session_state.pending_ack
             st.warning(
-                f"Ack required · {last.get('pci_status')} · "
+                f"Ack required · {last.get('scheduling_status')} · "
                 f"award {last.get('award_mw')} · burn {last.get('actual_burn')} · "
                 f"{last.get('deviation_pct', 0):+.2f}%"
             )
@@ -443,7 +443,7 @@ def render_cockpit() -> None:
             ts = last.get("ts")
             ts_s = ts.strftime("%H:%M:%S") if hasattr(ts, "strftime") else str(ts)
             st.caption(
-                f"Last update {ts_s} · PCI {last.get('pci_status')} · "
+                f"Last update {ts_s} · Scheduling {last.get('scheduling_status')} · "
                 f"var {last.get('deviation_pct', 0):+.2f}%"
             )
 
@@ -498,7 +498,7 @@ def render_cockpit() -> None:
                 x="time",
                 y="deviation",
                 markers=True,
-                color="pci_band" if "pci_band" in hist_df.columns else None,
+                color="scheduling_band" if "scheduling_band" in hist_df.columns else None,
                 labels={"deviation": "Var %", "time": ""},
             )
             fig.update_layout(

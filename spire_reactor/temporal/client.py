@@ -1,5 +1,5 @@
 """
-Temporal client helpers: connect and run PCI_ETRM_Operator_Update workflows.
+Temporal client helpers: connect and run Scheduling_ETRM_Operator_Update workflows.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from spire_reactor.temporal.settings import (
     temporal_settings,
 )
 
-WORKFLOW_NAME = "PCI_ETRM_Operator_Update"
+WORKFLOW_NAME = "Scheduling_ETRM_Operator_Update"
 
 
 async def connect_client(creds: Optional[dict[str, dict[str, str]]] = None) -> Any:
@@ -24,25 +24,25 @@ async def connect_client(creds: Optional[dict[str, dict[str, str]]] = None) -> A
     return await Client.connect(host, **kwargs)
 
 
-async def execute_pci_etrm_workflow(
+async def execute_scheduling_etrm_workflow(
     payload: dict[str, Any],
     *,
     creds: Optional[dict[str, dict[str, str]]] = None,
     workflow_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    Start PCI_ETRM_Operator_Update and wait for result.
+    Start Scheduling_ETRM_Operator_Update and wait for result.
 
     Returns the workflow result dict (same shape as local ritual envelope + fusion).
     """
-    from spire_reactor.workflows.pci_etrm_ritual import PCIEtrmRitual
+    from spire_reactor.workflows.scheduling_etrm_ritual import SchedulingEtrmRitual
 
     s = temporal_settings(creds)
     client = await connect_client(creds)
     plant = str((payload or {}).get("plant_id") or "plant")
-    wid = workflow_id or f"pci-etrm-{plant}-{uuid.uuid4().hex[:12]}"
+    wid = workflow_id or f"scheduling-etrm-{plant}-{uuid.uuid4().hex[:12]}"
     handle = await client.start_workflow(
-        PCIEtrmRitual.run,
+        SchedulingEtrmRitual.run,
         dict(payload or {}),
         id=wid,
         task_queue=s["task_queue"],
@@ -61,7 +61,7 @@ async def execute_pci_etrm_workflow(
     return out
 
 
-def execute_pci_etrm_workflow_sync(
+def execute_scheduling_etrm_workflow_sync(
     payload: dict[str, Any],
     *,
     creds: Optional[dict[str, dict[str, str]]] = None,
@@ -72,7 +72,7 @@ def execute_pci_etrm_workflow_sync(
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
-            execute_pci_etrm_workflow(payload, creds=creds, workflow_id=workflow_id)
+            execute_scheduling_etrm_workflow(payload, creds=creds, workflow_id=workflow_id)
         )
     # Already inside an event loop (rare for Streamlit) — use a new thread loop
     import concurrent.futures
@@ -80,7 +80,7 @@ def execute_pci_etrm_workflow_sync(
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(
             lambda: asyncio.run(
-                execute_pci_etrm_workflow(
+                execute_scheduling_etrm_workflow(
                     payload, creds=creds, workflow_id=workflow_id
                 )
             )

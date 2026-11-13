@@ -1,22 +1,52 @@
-sovereign-gas-burn-pci-etrm/
-├── README.md                  # Full onboarding + demo script
-├── .github/workflows/
-│   └── deploy.yml             # CI/CD to Spire/Azure
+OpenAlphaOperator/
+├── .dockerignore
+├── .env.example
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       └── deploy.yml
+├── .gitignore
+├── .streamlit/
+│   ├── config.toml
+│   └── secrets.toml.example
+├── Dockerfile
+├── README.md
+├── dashboard/
+│   ├── __init__.py
+│   ├── app.py
+│   ├── cockpit.py
+│   └── setup_stage.py
 ├── docker/
-│   ├── Dockerfile
 │   └── docker-compose.yml
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements-dev.txt
+├── requirements.txt
 ├── spire_reactor/
 │   ├── __init__.py
 │   ├── main.py
-│   ├── workflows/
-│   │   └── pci_etrm_ritual.py
 │   ├── activities/
+│   │   ├── __init__.py
+│   │   ├── burn.py
 │   │   └── fusion.py
-│   └── ingest/
-│       └── public_feeds.py
-├── docs/
-│   ├── PCI_Pipelines_Integration.md
-│   └── ETRM_Model_Mapping.md
-├── .gitignore
-├── pyproject.toml
-└── LICENSE
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── connectors.py
+│   │   └── integrations.py
+│   ├── ingest/
+│   │   ├── __init__.py
+│   │   └── public_feeds.py
+│   ├── temporal/
+│   │   ├── __init__.py
+│   │   ├── client.py
+│   │   ├── settings.py
+│   │   └── worker.py
+│   └── workflows/
+│       ├── __init__.py
+│       └── scheduling_etrm_ritual.py
+└── tests/
+    ├── __init__.py
+    ├── conftest.py
+    ├── test_fusion.py
+    ├── test_integrations.py
+    └── test_temporal_settings.py
