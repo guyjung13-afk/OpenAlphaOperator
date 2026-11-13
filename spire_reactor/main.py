@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Spire Reactor — Sovereign Gas Burn PCI + ETRM Ritual Engine
+Spire Reactor — Sovereign Gas Burn Scheduling + ETRM Ritual Engine
 
 Entry point for docker compose and local ops.
 
 Modes:
   api       (default CLI) FastAPI on :8000 — /health, /ritual/*
   worker    Redis pub/sub (Compose: --profile full)
-  temporal  Temporal worker for PCI_ETRM_Operator_Update (needs TEMPORAL_HOST)
+  temporal  Temporal worker for Scheduling_ETRM_Operator_Update (needs TEMPORAL_HOST)
   trigger   one-shot CLI ritual for scripts / shift checks
 
 Image default CMD is Streamlit; Compose overrides worker / temporal profiles.
@@ -128,7 +128,7 @@ def calculate_gas_burn(
     """
     Deterministic gas burn model (whiteboard-aligned kernel).
     estimated = award_mw * heat_rate * hours
-    variance vs actual → GREEN / AMBER / RED PCI band.
+    variance vs actual → GREEN / AMBER / RED Scheduling band.
     """
     estimated_burn = award_mw * heat_rate * hours
     variance_pct = (
@@ -139,27 +139,27 @@ def calculate_gas_burn(
     new_accum = prev_accum_mmbtu + actual_burn_mmbtu
 
     if abs(variance_pct) <= threshold_pct:
-        pci_status = "GREEN"
+        scheduling_status = "GREEN"
     elif abs(variance_pct) < 15:
-        pci_status = "AMBER"
+        scheduling_status = "AMBER"
     else:
-        pci_status = "RED"
+        scheduling_status = "RED"
 
     return {
         "estimated_burn_mmbtu": round(estimated_burn, 2),
         "variance_pct": round(variance_pct, 2),
         "new_accum_mmbtu": round(new_accum, 2),
-        "pci_status": pci_status,
-        "alert": pci_status != "GREEN",
+        "scheduling_status": scheduling_status,
+        "alert": scheduling_status != "GREEN",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def pci_band_to_etrm(pci_status: str) -> tuple[str, str]:
+def scheduling_band_to_etrm(scheduling_status: str) -> tuple[str, str]:
     """Map GREEN/AMBER/RED → public ETRM status + action (dashboard contract)."""
-    if pci_status == "GREEN":
+    if scheduling_status == "GREEN":
         return "COMPLIANT", "NONE"
-    if pci_status == "AMBER":
+    if scheduling_status == "AMBER":
         return "ALERT - REQUIRES RITUAL", "PROPAGATE_ALERT"
     return "ALERT - REQUIRES RITUAL", "PROPAGATE_CRITICAL"
 
@@ -174,7 +174,7 @@ def publish_ritual_result(channel: str, payload: dict[str, Any]) -> None:
     try:
         r = get_redis()
         r.publish(channel, json.dumps(payload))
-        r.setex("latest_pci_etrm", 7200, json.dumps(payload))
+        r.setex("latest_scheduling_etrm", 7200, json.dumps(payload))
     except Exception as exc:  # noqa: BLE001 — demo/local may lack Redis
         _info("redis_publish_skipped", error=str(exc), demo=DEMO_MODE)
 
@@ -186,7 +186,7 @@ def execute_gas_burn_local(
     via_temporal: bool = False,
 ) -> dict[str, Any]:
     """
-    Deterministic gas_burn_update: math → optional Snowflake land → Redis publish.
+    Deterministic gas_burn_update: math → Redis publish.
 
     via_temporal=True marks orchestrator metadata for activities (no re-dispatch).
     """
@@ -213,7 +213,7 @@ def execute_gas_burn_local(
         hours=hours,
         threshold_pct=float(payload.get("threshold_pct") or 5.0),
     )
-    etrm_status, etrm_action = pci_band_to_etrm(burn["pci_status"])
+    etrm_status, etrm_action = scheduling_band_to_etrm(burn["scheduling_status"])
     plant_id = str(payload.get("plant_id") or "DEMO-1")
     notes = str(payload.get("notes") or "")
     award_mmbtu = (
@@ -224,19 +224,19 @@ def execute_gas_burn_local(
 
     outcome = (
         "ALL_DOWNSTREAM_UPDATED"
-        if burn["pci_status"] == "GREEN"
+        if burn["scheduling_status"] == "GREEN"
         else "RITUAL_QUEUED"
     )
     public: dict[str, Any] = {
         "status": "success",
         "outcome": outcome,
-        "pci": heat_rate,
+        "scheduling": heat_rate,
         "heat_rate": heat_rate,
         "award_mw": award_mw,
         "award_mmbtu": award_mmbtu,
         "actual_burn_mmbtu": actual,
         "hours": hours,
-        "pci_status": burn["pci_status"],
+        "scheduling_status": burn["scheduling_status"],
         "etrm_status": etrm_status,
         "etrm_action": etrm_action,
         "deviation_pct": burn["variance_pct"],
@@ -248,7 +248,7 @@ def execute_gas_burn_local(
             "Power BI",
             "Provider Exports",
             "Compliance Ledger",
-            "Redis cache:latest_pci_etrm",
+            "Redis cache:latest_scheduling_etrm",
         ],
         "ritual_at": burn["timestamp"],
         "mode": "stub",
@@ -256,51 +256,6 @@ def execute_gas_burn_local(
         "result": burn,
         "orchestrator": "temporal-activity" if via_temporal else "local",
     }
-    try:
-        from spire_reactor.store.landing import insert_operator_burn_update
-
-        sf_status = insert_operator_burn_update(public, payload, burn)
-    except Exception as exc:  # noqa: BLE001
-        sf_status = {
-            "ok": False,
-            "skipped": False,
-            "message": f"Snowflake landing error: {exc}",
-        }
-    public["snowflake"] = sf_status
-    if sf_status.get("ok"):
-        public["mode"] = "live"
-        consumers = list(public.get("consumers") or [])
-        landing = sf_status.get("landing_table") or "LANDING_OPERATOR_BURN_UPDATE"
-        if landing not in consumers:
-            consumers.append(landing)
-        if sf_status.get("staging_written"):
-            consumers.append("STAGING_GAS_BURN")
-        public["consumers"] = consumers
-        _info(
-            "snowflake_landing_ok",
-            load_id=sf_status.get("load_id"),
-            table=sf_status.get("landing_table"),
-            staging=sf_status.get("staging_written"),
-        )
-    elif sf_status.get("skipped"):
-        # Read-only lake mode is the intended product path — not a failure.
-        reason = str(sf_status.get("reason") or "")
-        if reason in ("read_only_lake", "demo_mode"):
-            public["mode"] = "live-ingest" if reason == "read_only_lake" else "stub"
-        else:
-            public["mode"] = "stub"
-        _info(
-            "snowflake_landing_skipped",
-            reason=sf_status.get("reason"),
-            message=sf_status.get("message"),
-        )
-    else:
-        public["mode"] = "stub"
-        _error(
-            "snowflake_landing_failed",
-            message=sf_status.get("message"),
-            load_id=sf_status.get("load_id"),
-        )
     publish_ritual_result("ritual_results", public)
     return public
 
@@ -314,8 +269,8 @@ def trigger_ritual(
     Core ritual dispatcher.
 
     gas_burn_update:
-      - When Temporal is configured + enabled → durable PCI_ETRM_Operator_Update
-      - Else local execute_gas_burn_local (math + SoR + Redis)
+      - When Temporal is configured + enabled → durable Scheduling_ETRM_Operator_Update
+      - Else local execute_gas_burn_local (math + Redis)
     """
     payload = dict(payload or {})
     canonical = _RITUAL_ALIASES.get(ritual_type, ritual_type)
@@ -333,10 +288,10 @@ def trigger_ritual(
 
         if use_temporal:
             try:
-                from spire_reactor.temporal.client import execute_pci_etrm_workflow_sync
+                from spire_reactor.temporal.client import execute_scheduling_etrm_workflow_sync
 
                 _info("temporal_workflow_start", ritual="gas_burn_update")
-                result = execute_pci_etrm_workflow_sync(payload)
+                result = execute_scheduling_etrm_workflow_sync(payload)
                 if result.get("status") == "error":
                     _error("temporal_workflow_error", message=result.get("message"))
                     # Fall back to local so the desk still works
@@ -367,7 +322,7 @@ def trigger_ritual(
             "check_id": f"MORNING-{int(time.time())}",
             "items": [
                 "Redis reachable",
-                "Last PCI ritual present",
+                "Last Scheduling ritual present",
                 "Open alerts scan (stub)",
             ],
             "demo": DEMO_MODE,
@@ -400,14 +355,14 @@ def trigger_ritual(
 # ── FastAPI (Docker health + HTTP rituals) ───────────────────────────
 app = FastAPI(
     title="OpenAlphaOperator Spire Reactor",
-    description="Sovereign Gas Burn PCI + ETRM ritual engine",
+    description="Sovereign Gas Burn Scheduling + ETRM ritual engine",
     version="0.2.0",
 )
 
 
 class OperatorUpdate(BaseModel):
     plant_id: str = "DEMO-1"
-    heat_rate: float | None = Field(default=None, description="HR (mmbtu/MWh) used as PCI kernel input")
+    heat_rate: float | None = Field(default=None, description="HR (mmbtu/MWh) used as Scheduling kernel input")
     award_mw: float | None = Field(default=None, gt=0)
     award_mmbtu: float | None = Field(default=None, gt=0)
     actual_burn_mmbtu: float = Field(ge=0)
@@ -424,23 +379,8 @@ class RitualRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    snowflake_cfg = False
-    snowflake_write = False
-    snowflake_read = False
     temporal_cfg = False
     temporal_dispatch = False
-    try:
-        from spire_reactor.store.snowflake_client import (
-            is_snowflake_configured,
-            snowflake_read_enabled,
-            snowflake_write_enabled,
-        )
-
-        snowflake_cfg = is_snowflake_configured()
-        snowflake_write = snowflake_write_enabled()
-        snowflake_read = snowflake_read_enabled()
-    except Exception:  # noqa: BLE001
-        pass
     try:
         from spire_reactor.temporal.settings import (
             is_temporal_configured,
@@ -459,9 +399,7 @@ def health() -> dict[str, Any]:
         "demo": demo,
         "demo_env": DEMO_MODE,
         "redis_url": REDIS_URL,
-        "snowflake_configured": snowflake_cfg,
-        "snowflake_write_enabled": snowflake_write,
-        "snowflake_read_enabled": snowflake_read,
+        "public_feeds": ["open-meteo", "eia"],
         "temporal_configured": temporal_cfg,
         "temporal_dispatch_enabled": temporal_dispatch,
     }
@@ -477,7 +415,6 @@ def root() -> dict[str, str]:
         "dispatch": "POST /ritual",
         "ingest_snapshot": "GET /ingest/snapshot",
         "ingest_ritual": "POST /ingest/demo-ritual",
-        "sor_landing": "GET /sor/landing",
     }
 
 
@@ -507,39 +444,6 @@ def ingest_snapshot(synthetic: bool = False) -> dict[str, Any]:
     if synthetic:
         return synthetic_tick()
     return fetch_demo_snapshot()
-
-
-@app.get("/sor/landing")
-def sor_landing(limit: int = 25, plant_id: str | None = None) -> dict[str, Any]:
-    """
-    Desk feed from Snowflake.
-
-    Default: **read-only lake ingest** (V_CALCULATED_GAS_BURN).
-    Optional legacy write-table path only if SNOWFLAKE_SOR_MODE=landing.
-    """
-    mode = (os.getenv("SNOWFLAKE_SOR_MODE") or "lake").strip().lower()
-    if mode in ("landing", "write_table", "operator_burn"):
-        from spire_reactor.store.landing import fetch_recent_operator_burns
-
-        result = fetch_recent_operator_burns(limit=limit, plant_id=plant_id or None)
-    else:
-        from spire_reactor.store.lake import fetch_lake_gas_burn
-
-        result = fetch_lake_gas_burn(limit=limit, unit_name=plant_id or None)
-    if result.get("ok") is False and not result.get("skipped"):
-        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
-    return result
-
-
-@app.get("/lake/gas-burn")
-def lake_gas_burn(limit: int = 50, unit_name: str | None = None) -> dict[str, Any]:
-    """Explicit read-only lake ingest endpoint."""
-    from spire_reactor.store.lake import fetch_lake_gas_burn
-
-    result = fetch_lake_gas_burn(limit=limit, unit_name=unit_name or None)
-    if result.get("ok") is False and not result.get("skipped"):
-        raise HTTPException(status_code=502, detail=result.get("message") or "Lake read failed")
-    return result
 
 
 @app.post("/ingest/demo-ritual")
@@ -598,7 +502,7 @@ def run_api() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Spire Reactor — PCI + ETRM")
+    parser = argparse.ArgumentParser(description="Spire Reactor — Scheduling + ETRM")
     parser.add_argument(
         "--mode",
         choices=["api", "worker", "temporal", "trigger", "ingest"],

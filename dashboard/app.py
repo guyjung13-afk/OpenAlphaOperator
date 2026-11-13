@@ -3,7 +3,7 @@ OpenAlphaOperator dashboard entrypoint.
 
 Flow:
   1. Setup stage — connect real-time integrations that need logins
-  2. Commercial Truth Cockpit — desk operator view
+  2. Real Time Desk — operator view on public feeds
 
 Run from repo root:
   streamlit run dashboard/app.py
@@ -21,7 +21,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-# Host Streamlit parity with Docker: load .env so SNOWFLAKE_*/EIA_API_KEY/REDIS_URL work
+# Host Streamlit parity with Docker: load .env so EIA_API_KEY / REDIS_URL work
 # without requiring secrets.toml (Docker injects env; interactive desk also uses Setup).
 try:
     from dotenv import load_dotenv

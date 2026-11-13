@@ -71,7 +71,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "phase": "live",
         "auth_required": False,
         "optional": True,
-        "description": "Pub/sub + latest PCI cache. Local Docker has no password; embed password in URL if needed.",
+        "description": "Pub/sub + latest Scheduling cache. Local Docker has no password; embed password in URL if needed.",
         "help_url": None,
         "fields": [
             {
@@ -86,60 +86,13 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "test": "test_redis",
     },
     {
-        "id": "snowflake",
-        "label": "Snowflake (data lake — read-only ingest)",
-        "category": "store",
-        "phase": "live",
-        "auth_required": True,
-        "optional": False,
-        "description": (
-            "Read-only login to the AlphaGen lake (views like V_CALCULATED_GAS_BURN). "
-            "The desk **ingests** commercial truth; it does not write or create objects."
-        ),
-        "help_url": "https://docs.snowflake.com/",
-        "fields": [
-            {"key": "account", "label": "Account", "secret": False, "env": "SNOWFLAKE_ACCOUNT", "default": ""},
-            {"key": "user", "label": "User", "secret": False, "env": "SNOWFLAKE_USER", "default": ""},
-            {
-                "key": "password",
-                "label": "Password",
-                "secret": True,
-                "env": "SNOWFLAKE_PASSWORD",
-                "default": "",
-            },
-            {
-                "key": "warehouse",
-                "label": "Warehouse",
-                "secret": False,
-                "env": "SNOWFLAKE_WAREHOUSE",
-                "default": "ALPHAGEN_WH",
-            },
-            {
-                "key": "database",
-                "label": "Database",
-                "secret": False,
-                "env": "SNOWFLAKE_DATABASE",
-                "default": "ALPHAGEN",
-            },
-            {
-                "key": "schema",
-                "label": "Schema",
-                "secret": False,
-                "env": "SNOWFLAKE_SCHEMA",
-                "default": "DBO",
-            },
-        ],
-        "secrets_section": "snowflake",
-        "test": "test_snowflake",
-    },
-    {
         "id": "temporal",
         "label": "Temporal (durable rituals)",
         "category": "orchestrate",
         "phase": "live",
         "auth_required": True,
         "optional": True,
-        "description": "Durable PCI_ETRM_Operator_Update workflow. Local: host localhost:7233; Cloud: host + API key + TLS.",
+        "description": "Durable Scheduling_ETRM_Operator_Update workflow. Local: host localhost:7233; Cloud: host + API key + TLS.",
         "help_url": "https://docs.temporal.io/",
         "fields": [
             {
@@ -174,7 +127,7 @@ INTEGRATIONS: list[dict[str, Any]] = [
         "phase": "live",
         "auth_required": True,
         "optional": True,
-        "description": "Optional fusion notify URL (POST JSON). Used by fuse_pci_etrm activity.",
+        "description": "Optional fusion notify URL (POST JSON). Used by fuse_scheduling_etrm activity.",
         "help_url": None,
         "fields": [
             {
@@ -397,7 +350,6 @@ def write_secrets(
       {
         "app": {"demo_mode": True, "setup_complete": True},
         "eia": {"api_key": "..."},
-        "snowflake": {"account": "...", ...},
       }
     Empty secret fields are omitted so operators can leave blanks to keep env-only.
     """

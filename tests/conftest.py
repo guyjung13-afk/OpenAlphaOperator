@@ -17,16 +17,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     keys = [
         "DEMO_MODE",
         "SETUP_COMPLETE",
-        "SNOWFLAKE_ACCOUNT",
-        "SNOWFLAKE_USER",
-        "SNOWFLAKE_PASSWORD",
-        "SNOWFLAKE_WAREHOUSE",
-        "SNOWFLAKE_DATABASE",
-        "SNOWFLAKE_SCHEMA",
-        "SNOWFLAKE_ROLE",
-        "SNOWFLAKE_WRITE",
-        "SNOWFLAKE_READ",
-        "SNOWFLAKE_STAGING_WRITE",
         "TEMPORAL_HOST",
         "TEMPORAL_NAMESPACE",
         "TEMPORAL_API_KEY",
@@ -47,22 +37,6 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def sf_creds() -> dict[str, dict[str, str]]:
-    """Realistic-looking (fake) Snowflake credentials for gate tests."""
-    return {
-        "snowflake": {
-            "account": "xy12345.us-east-1",
-            "user": "operator_bot",
-            "password": "s3cret-not-real",
-            "warehouse": "COMPUTE_WH",
-            "database": "ALPHAGEN_ETRM",
-            "schema": "GOLD",
-        },
-        "app": {"demo_mode": "false", "setup_complete": "true"},
-    }
-
-
-@pytest.fixture
 def ritual_public() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -75,7 +49,7 @@ def ritual_public() -> dict[str, Any]:
         "estimated_burn_mmbtu": 3750.0,
         "deviation_pct": 0.0,
         "new_accum_mmbtu": 3750.0,
-        "pci_status": "GREEN",
+        "scheduling_status": "GREEN",
         "etrm_status": "COMPLIANT",
         "etrm_action": "NONE",
         "outcome": "ALL_DOWNSTREAM_UPDATED",
@@ -106,6 +80,6 @@ def ritual_burn() -> dict[str, Any]:
         "estimated_burn_mmbtu": 3750.0,
         "variance_pct": 0.0,
         "new_accum_mmbtu": 3750.0,
-        "pci_status": "GREEN",
+        "scheduling_status": "GREEN",
         "timestamp": "2026-07-29T15:00:00+00:00",
     }

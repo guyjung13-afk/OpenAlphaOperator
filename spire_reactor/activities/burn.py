@@ -1,5 +1,5 @@
 """
-Temporal activity: compute gas burn PCI/ETRM and land to Snowflake SoR.
+Temporal activity: compute gas burn Scheduling/ETRM and publish the result.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from temporalio import activity
 @activity.defn(name="compute_and_land_gas_burn")
 async def compute_and_land_gas_burn(payload: dict[str, Any]) -> dict[str, Any]:
     """
-    Deterministic burn math + optional Snowflake landing + Redis publish.
+    Deterministic burn math + Redis publish.
 
     Delegates to spire_reactor.main.execute_gas_burn_local so local CLI and
     Temporal share one implementation (no Temporal re-entry).
@@ -25,9 +25,8 @@ async def compute_and_land_gas_burn(payload: dict[str, Any]) -> dict[str, Any]:
 
     result = execute_gas_burn_local(dict(payload or {}), via_temporal=True)
     activity.logger.info(
-        "compute_and_land done mode=%s pci=%s snowflake_ok=%s",
+        "compute_and_land done mode=%s scheduling=%s",
         result.get("mode"),
-        result.get("pci_status"),
-        (result.get("snowflake") or {}).get("ok"),
+        result.get("scheduling_status"),
     )
     return result

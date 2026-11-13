@@ -1,5 +1,5 @@
 """
-Public / free feed adapters for OpenAlphaOperator demos (no Snowflake required).
+Public feed adapters for OpenAlphaOperator demos.
 
 Sources:
   - Open-Meteo  (no API key) — weather as demand / heat-rate proxy

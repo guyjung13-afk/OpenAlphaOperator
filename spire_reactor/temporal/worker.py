@@ -19,9 +19,9 @@ async def run_temporal_worker(
     from temporalio.worker import Worker
 
     from spire_reactor.activities.burn import compute_and_land_gas_burn
-    from spire_reactor.activities.fusion import fuse_pci_etrm
+    from spire_reactor.activities.fusion import fuse_scheduling_etrm
     from spire_reactor.temporal.client import connect_client
-    from spire_reactor.workflows.pci_etrm_ritual import PCIEtrmRitual
+    from spire_reactor.workflows.scheduling_etrm_ritual import SchedulingEtrmRitual
 
     s = temporal_settings(creds)
     if not s["host"]:
@@ -33,8 +33,8 @@ async def run_temporal_worker(
     worker = Worker(
         client,
         task_queue=s["task_queue"],
-        workflows=[PCIEtrmRitual],
-        activities=[compute_and_land_gas_burn, fuse_pci_etrm],
+        workflows=[SchedulingEtrmRitual],
+        activities=[compute_and_land_gas_burn, fuse_scheduling_etrm],
     )
     log.info(
         "Temporal worker starting host=%s namespace=%s queue=%s",

@@ -1,12 +1,11 @@
 """
-Temporal activity: PCI + ETRM fusion / downstream propagation.
+Temporal activity: Scheduling + ETRM fusion / downstream propagation.
 
 Steps (best-effort, never raises unless totally broken):
-  1. Load latest SoR context (Snowflake landing when available)
-  2. Rule-based fusion action from PCI/ETRM band
-  3. Optional xAI insight text (skipped if no key)
-  4. Redis cache latest_pci_etrm + publish fusion channel
-  5. Optional downstream webhook
+  1. Rule-based fusion action from Scheduling/ETRM band
+  2. Optional xAI insight text (skipped if no key)
+  3. Redis cache latest_scheduling_etrm + publish fusion channel
+  4. Optional downstream webhook
 """
 
 from __future__ import annotations
@@ -21,29 +20,29 @@ from temporalio import activity
 
 def _rule_fusion(public: dict[str, Any]) -> dict[str, Any]:
     """Deterministic fusion insight from ritual envelope (no LLM required)."""
-    pci = str(public.get("pci_status") or "GREEN")
+    scheduling = str(public.get("scheduling_status") or "GREEN")
     etrm_status = str(public.get("etrm_status") or "COMPLIANT")
     etrm_action = str(public.get("etrm_action") or "NONE")
     variance = float(public.get("deviation_pct") or 0.0)
 
-    if pci == "GREEN":
+    if scheduling == "GREEN":
         action = "NONE"
         provider_msg = (
-            f"PCI GREEN · variance {variance:+.2f}% · ETRM {etrm_status}. "
+            f"Scheduling GREEN · variance {variance:+.2f}% · ETRM {etrm_status}. "
             "No propagation required; consumers remain on last compliant envelope."
         )
         severity = "info"
-    elif pci == "AMBER":
+    elif scheduling == "AMBER":
         action = etrm_action if etrm_action != "NONE" else "PROPAGATE_ALERT"
         provider_msg = (
-            f"PCI AMBER · variance {variance:+.2f}% · ETRM {etrm_status}. "
+            f"Scheduling AMBER · variance {variance:+.2f}% · ETRM {etrm_status}. "
             "Queue consumer refresh and desk review within the hour."
         )
         severity = "warning"
     else:
         action = etrm_action if etrm_action != "NONE" else "PROPAGATE_CRITICAL"
         provider_msg = (
-            f"PCI RED · variance {variance:+.2f}% · ETRM {etrm_status}. "
+            f"Scheduling RED · variance {variance:+.2f}% · ETRM {etrm_status}. "
             "Immediate operator acknowledgment and downstream alert path."
         )
         severity = "critical"
@@ -52,7 +51,7 @@ def _rule_fusion(public: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "provider_msg": provider_msg,
         "severity": severity,
-        "pci_status": pci,
+        "scheduling_status": scheduling,
         "etrm_status": etrm_status,
         "source": "rules",
     }
@@ -73,7 +72,7 @@ def _optional_xai_insight(public: dict[str, Any], base: dict[str, Any]) -> dict[
     prompt = (
         "You are a gas-plant commercial desk assistant. In 2 short sentences, "
         "summarize operator burn update for downstream consumers. No bid prices.\n"
-        f"plant={public.get('plant_id')} pci={public.get('pci_status')} "
+        f"plant={public.get('plant_id')} scheduling={public.get('scheduling_status')} "
         f"etrm={public.get('etrm_status')} variance_pct={public.get('deviation_pct')} "
         f"award_mw={public.get('award_mw')} actual_burn={public.get('actual_burn_mmbtu')} "
         f"notes={public.get('notes')}"
@@ -141,7 +140,7 @@ def _redis_publish(fusion_payload: dict[str, Any]) -> dict[str, Any]:
             pass
         r = redis.from_url(url, decode_responses=True, socket_connect_timeout=3)
         body = json.dumps(fusion_payload, default=str)
-        r.setex("latest_pci_etrm", 7200, body)
+        r.setex("latest_scheduling_etrm", 7200, body)
         r.publish("ritual_results", body)
         r.publish("fusion_results", body)
         return {"ok": True, "skipped": False, "message": "Redis updated"}
@@ -182,31 +181,8 @@ def _webhook_post(fusion_payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "skipped": False, "message": str(exc)[:200]}
 
 
-def _sor_context(public: dict[str, Any]) -> dict[str, Any]:
-    """Optional latest landing row for the plant (read path)."""
-    plant = str(public.get("plant_id") or "").strip() or None
-    try:
-        from spire_reactor.store.landing import fetch_latest_operator_burn
-
-        latest = fetch_latest_operator_burn(plant_id=plant)
-        if latest.get("ok") and latest.get("row"):
-            return {
-                "ok": True,
-                "skipped": False,
-                "row": latest["row"],
-                "message": latest.get("message"),
-            }
-        return {
-            "ok": False,
-            "skipped": bool(latest.get("skipped")),
-            "message": latest.get("message") or "no row",
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "skipped": False, "message": str(exc)[:200]}
-
-
-@activity.defn(name="fuse_pci_etrm")
-async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
+@activity.defn(name="fuse_scheduling_etrm")
+async def fuse_scheduling_etrm(public: dict[str, Any]) -> dict[str, Any]:
     """
     Fuse operator update into downstream signals.
 
@@ -214,20 +190,19 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
     """
     public = dict(public or {})
     activity.logger.info(
-        "fuse_pci_etrm plant=%s pci=%s",
+        "fuse_scheduling_etrm plant=%s scheduling=%s",
         public.get("plant_id"),
-        public.get("pci_status"),
+        public.get("scheduling_status"),
     )
 
     base = _rule_fusion(public)
     insight = _optional_xai_insight(public, base)
-    sor = _sor_context(public)
 
     fusion_payload = {
         "event": "operator_update_fusion",
         "fused_at": datetime.now(timezone.utc).isoformat(),
         "plant_id": public.get("plant_id"),
-        "pci_status": public.get("pci_status"),
+        "scheduling_status": public.get("scheduling_status"),
         "etrm_status": public.get("etrm_status"),
         "etrm_action": insight.get("action") or public.get("etrm_action"),
         "deviation_pct": public.get("deviation_pct"),
@@ -238,9 +213,8 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
         "severity": insight.get("severity"),
         "source": insight.get("source"),
         "ritual_at": public.get("ritual_at"),
-        "snowflake": public.get("snowflake"),
         "mode": public.get("mode"),
-        "workflow_step": "fuse_pci_etrm",
+        "workflow_step": "fuse_scheduling_etrm",
     }
 
     redis_status = _redis_publish(fusion_payload)
@@ -248,14 +222,14 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
 
     outcome = (
         "ALL_DOWNSTREAM_UPDATED"
-        if str(public.get("pci_status")) == "GREEN"
+        if str(public.get("scheduling_status")) == "GREEN"
         else "RITUAL_QUEUED"
     )
 
     result = {
         "ok": True,
-        "pci": float(public.get("heat_rate") or public.get("pci") or 0.0),
-        "pci_status": public.get("pci_status"),
+        "scheduling": float(public.get("heat_rate") or public.get("scheduling") or 0.0),
+        "scheduling_status": public.get("scheduling_status"),
         "action": insight.get("action"),
         "provider_msg": insight.get("provider_msg"),
         "severity": insight.get("severity"),
@@ -263,14 +237,6 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
         "redis": redis_status,
         "webhook": webhook_status,
         "xai": insight.get("xai"),
-        "sor": {
-            "ok": sor.get("ok"),
-            "skipped": sor.get("skipped"),
-            "message": sor.get("message"),
-            # do not dump full row into every consumer — summary only
-            "load_id": (sor.get("row") or {}).get("load_id") if sor.get("row") else None,
-            "pci_status": (sor.get("row") or {}).get("pci_status") if sor.get("row") else None,
-        },
         "fused_at": fusion_payload["fused_at"],
     }
     activity.logger.info(
@@ -283,7 +249,7 @@ async def fuse_pci_etrm(public: dict[str, Any]) -> dict[str, Any]:
 
 
 # Sync helper for non-Temporal local fusion pass
-def fuse_pci_etrm_sync(public: dict[str, Any]) -> dict[str, Any]:
+def fuse_scheduling_etrm_sync(public: dict[str, Any]) -> dict[str, Any]:
     """Run fusion without Temporal activity context (local path optional)."""
     public = dict(public or {})
     base = _rule_fusion(public)
@@ -292,7 +258,7 @@ def fuse_pci_etrm_sync(public: dict[str, Any]) -> dict[str, Any]:
         "event": "operator_update_fusion",
         "fused_at": datetime.now(timezone.utc).isoformat(),
         "plant_id": public.get("plant_id"),
-        "pci_status": public.get("pci_status"),
+        "scheduling_status": public.get("scheduling_status"),
         "etrm_status": public.get("etrm_status"),
         "etrm_action": insight.get("action") or public.get("etrm_action"),
         "deviation_pct": public.get("deviation_pct"),
@@ -300,13 +266,13 @@ def fuse_pci_etrm_sync(public: dict[str, Any]) -> dict[str, Any]:
         "severity": insight.get("severity"),
         "source": insight.get("source"),
         "mode": public.get("mode"),
-        "workflow_step": "fuse_pci_etrm_local",
+        "workflow_step": "fuse_scheduling_etrm_local",
     }
     redis_status = _redis_publish(fusion_payload)
     webhook_status = _webhook_post(fusion_payload)
     return {
         "ok": True,
-        "pci": float(public.get("heat_rate") or public.get("pci") or 0.0),
+        "scheduling": float(public.get("heat_rate") or public.get("scheduling") or 0.0),
         "action": insight.get("action"),
         "provider_msg": insight.get("provider_msg"),
         "severity": insight.get("severity"),

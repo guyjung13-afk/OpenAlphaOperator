@@ -1,7 +1,7 @@
 [project]
 name = "openalphaoperator"
 version = "0.1.0"
-description = "Sovereign Gas Burn PCI + ETRM Reactor"
+description = "Sovereign Gas Burn Scheduling + ETRM Reactor"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

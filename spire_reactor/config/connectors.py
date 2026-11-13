@@ -134,83 +134,6 @@ def test_redis(url: str = "redis://localhost:6379/0", password: str = "", **_: A
         )
 
 
-def test_snowflake(
-    account: str = "",
-    user: str = "",
-    password: str = "",
-    warehouse: str = "COMPUTE_WH",
-    database: str = "ALPHAGEN_ETRM",
-    schema: str = "GOLD",
-    **_: Any,
-) -> dict[str, Any]:
-    """Connect to Snowflake and run SELECT 1 (uses shared client when possible)."""
-    t0 = time.perf_counter()
-    account = (account or "").strip()
-    user = (user or "").strip()
-    password = (password or "").strip()
-    if not account or not user or not password:
-        ms = (time.perf_counter() - t0) * 1000
-        return _result(
-            "snowflake",
-            False,
-            "Missing account, user, or password",
-            ms,
-        )
-    # Build a mini creds map so Setup form values win over env for this test
-    test_creds = {
-        "snowflake": {
-            "account": account,
-            "user": user,
-            "password": password,
-            "warehouse": warehouse or "COMPUTE_WH",
-            "database": database or "ALPHAGEN_ETRM",
-            "schema": schema or "GOLD",
-        }
-    }
-    try:
-        from spire_reactor.store.snowflake_client import (
-            connection,
-            is_snowflake_configured,
-        )
-
-        if not is_snowflake_configured(test_creds):
-            ms = (time.perf_counter() - t0) * 1000
-            return _result(
-                "snowflake",
-                False,
-                "Placeholder credentials — replace with real Snowflake login",
-                ms,
-            )
-        with connection(test_creds) as conn:
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            finally:
-                cur.close()
-        ms = (time.perf_counter() - t0) * 1000
-        return _result(
-            "snowflake",
-            True,
-            f"OK — connected ({database or 'ALPHAGEN_ETRM'}.{schema or 'GOLD'})",
-            ms,
-        )
-    except ImportError:
-        ms = (time.perf_counter() - t0) * 1000
-        return _result(
-            "snowflake",
-            False,
-            "snowflake-connector-python not installed",
-            ms,
-        )
-    except Exception as exc:  # noqa: BLE001
-        ms = (time.perf_counter() - t0) * 1000
-        msg = str(exc)
-        if password and password in msg:
-            msg = msg.replace(password, "••••")
-        return _result("snowflake", False, f"Auth/connect failed: {msg}", ms)
-
-
 def test_temporal(
     host: str = "",
     namespace: str = "default",
@@ -368,7 +291,6 @@ _TESTERS: dict[str, Callable[..., dict[str, Any]]] = {
     "test_open_meteo": test_open_meteo,
     "test_eia": test_eia,
     "test_redis": test_redis,
-    "test_snowflake": test_snowflake,
     "test_temporal": test_temporal,
     "test_webhooks": test_webhooks,
     "test_xai": test_xai,

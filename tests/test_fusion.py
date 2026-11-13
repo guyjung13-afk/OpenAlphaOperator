@@ -1,16 +1,16 @@
-"""Unit tests for PCI/ETRM rule fusion (no network)."""
+"""Unit tests for Scheduling/ETRM rule fusion (no network)."""
 
 from __future__ import annotations
 
 import pytest
-from spire_reactor.activities.fusion import _rule_fusion, fuse_pci_etrm_sync
+from spire_reactor.activities.fusion import _rule_fusion, fuse_scheduling_etrm_sync
 
 
 @pytest.mark.unit
 def test_rule_fusion_green():
     out = _rule_fusion(
         {
-            "pci_status": "GREEN",
+            "scheduling_status": "GREEN",
             "etrm_status": "COMPLIANT",
             "etrm_action": "NONE",
             "deviation_pct": 0.5,
@@ -26,7 +26,7 @@ def test_rule_fusion_green():
 def test_rule_fusion_amber_defaults_propagate():
     out = _rule_fusion(
         {
-            "pci_status": "AMBER",
+            "scheduling_status": "AMBER",
             "etrm_status": "REVIEW",
             "etrm_action": "NONE",
             "deviation_pct": 3.2,
@@ -40,7 +40,7 @@ def test_rule_fusion_amber_defaults_propagate():
 def test_rule_fusion_amber_keeps_etrm_action():
     out = _rule_fusion(
         {
-            "pci_status": "AMBER",
+            "scheduling_status": "AMBER",
             "etrm_status": "REVIEW",
             "etrm_action": "HOLD_DISPATCH",
             "deviation_pct": 4.0,
@@ -54,7 +54,7 @@ def test_rule_fusion_amber_keeps_etrm_action():
 def test_rule_fusion_red_critical():
     out = _rule_fusion(
         {
-            "pci_status": "RED",
+            "scheduling_status": "RED",
             "etrm_status": "BREACH",
             "etrm_action": "NONE",
             "deviation_pct": -12.0,
@@ -72,7 +72,7 @@ def test_fuse_sync_no_redis_no_webhook(monkeypatch, ritual_public):
     monkeypatch.delenv("WEBHOOK_URL", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
-    out = fuse_pci_etrm_sync(ritual_public)
+    out = fuse_scheduling_etrm_sync(ritual_public)
     assert out["ok"] is True
     assert out["action"] == "NONE"
     assert out["severity"] == "info"
