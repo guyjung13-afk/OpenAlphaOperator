@@ -2,7 +2,7 @@
 
 **Real Time Desk** — a Streamlit operator demo that runs on public data only.
 
-The desk computes a deterministic gas-burn Scheduling / ETRM ritual from public feeds. Current connectors are Open-Meteo and optional EIA Open Data. Later public connectors (not in this tree yet) are FERC, PJM, and ERCOT.
+The desk shows public tags (weather, optional EIA, ERCOT and PJM LMPs) and can ask a local Ollama model to query them. A local burn check is optional. Temporal, Redis, and Docker are not required to run the desk.
 
 ## Layout
 
@@ -37,15 +37,63 @@ OpenAlphaOperator/
 
 ## Public data
 
-`spire_reactor/ingest/public_feeds.py` is the only data path:
+Tag names, units, and timestamps are documented in [docs/PUBLIC_TAGS.md](docs/PUBLIC_TAGS.md). The map is `spire_reactor/tags/schema.py`.
 
 | Source | Login | What it supplies |
 |--------|--------|------------------|
-| **Open-Meteo** | No | Weather → synthetic plant load / burn |
-| **EIA Open Data** | Optional free API key | Natural gas price when configured |
-| **Synthetic tick** | No | Offline / CI fallback (no network) |
+| **Open-Meteo** | No | `WX.{SITE}.*` temperature, wind, humidity |
+| **EIA Open Data** | Optional free API key | `EIA.NG.RNGWHHD` Henry Hub daily spot. No key → empty |
+| **ERCOT** | No | `ERCOT.{HUB or LZ}.LMP` public settlement point prices |
+| **PJM Data Miner 2** | Optional free subscription key | `PJM.{HUB}.LMP` five-minute hub LMPs. No key → empty |
+| **Synthetic sample** | No | Offline button only. Labeled synthetic. Not used when a live feed fails |
 
-Those fields map into the same `gas_burn_update` ritual payload as the operator form. The desk does not call a private warehouse or a private plant feed.
+A failed or missing source is `source unavailable` and has no number. FERC eLibrary is not wired.
+
+## Run on a single box
+
+Unprivileged user, no sudo, no Docker, no Temporal. From the repo root:
+
+```bash
+chmod +x scripts/run_dashboard.sh
+./scripts/run_dashboard.sh
+```
+
+The script creates `.venv` on first run, installs `requirements.txt`, and listens on `0.0.0.0:8501`. If `python3 -m venv` has no `ensurepip`, it bootstraps pip itself (still no sudo). Open `http://<this-host>:8501`.
+
+Optional user service (edit the paths if the clone is not `~/OpenAlphaOperator`):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/openalpha-desk.user.service ~/.config/systemd/user/openalpha-desk.service
+systemctl --user daemon-reload
+systemctl --user enable --now openalpha-desk.service
+```
+
+### Environment
+
+Copy `.env.example` to `.env` if you want keys. Empty values are fine. The run script loads `.env` when it is present.
+
+| Variable | Default | Role |
+|----------|---------|------|
+| `DESK_BIND` | `0.0.0.0` | Listen address |
+| `DESK_PORT` | `8501` | Listen port |
+| `DESK_TIMEZONE` | `America/Chicago` | Local clock on the desk. Samples stay UTC |
+| `SETUP_COMPLETE` | `true` in the run script | Skip the setup gate |
+| `DEMO_LAT` / `DEMO_LON` | `29.76` / `-95.37` | Open-Meteo coordinates |
+| `WX_SITE` | `HOUSTON` | Site segment in `WX.{SITE}.*` |
+| `OPEN_METEO_URL` | `https://api.open-meteo.com/v1/forecast` | Primary weather host |
+| `OPEN_METEO_FALLBACK_URLS` | (empty) | Extra Open-Meteo hosts, comma-separated. Built-in fallbacks are already tried |
+| `EIA_API_KEY` | empty | EIA. Absent → source unavailable |
+| `EIA_SERIES_ROUTE` | `natural-gas/pri/sum/data` | EIA v2 route |
+| `EIA_SERIES_ID` | `RNGWHHD` | Series id (Henry Hub daily spot) |
+| `ERCOT_PRICES_URL` | public dashboard JSON | Primary ERCOT prices |
+| `ERCOT_REPORT_TYPE_ID` | `12301` | MIS report used if the dashboard JSON fails |
+| `PJM_API_KEY` | empty | Data Miner 2 subscription key. Absent → source unavailable |
+| `PJM_API_URL` | `rt_unverified_fivemin_lmps` | PJM feed URL |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Local Ollama. Unreachable → query panel hidden |
+| `OLLAMA_MODEL` | `qwen3.5:9b` | Model name |
+
+`TEMPORAL_HOST` is only for the optional durable ritual worker. The desk does not start Temporal.
 
 ## Tests & CI
 
@@ -177,9 +225,9 @@ python -m spire_reactor.main --mode trigger --ritual gas_burn_update \
 | Layer | State |
 |-------|--------|
 | Setup stage | Optional logins + connection tests (Open-Meteo, EIA, Redis, Temporal) |
-| Streamlit dashboard | Real Time Desk on public feeds |
+| Streamlit dashboard | Real Time Desk on public tags |
 | Spire Reactor | Ritual engine + API + Redis worker (`--profile full`) |
-| Public feeds | Open-Meteo + optional EIA → ritual (`--mode ingest`) |
+| Public feeds | Open-Meteo, optional EIA, ERCOT LMP, optional PJM LMP |
 | Docker / Redis | Compose-ready (redis + dashboard) |
 | Temporal fusion | `Scheduling_ETRM_Operator_Update` workflow + worker (`--mode temporal`) |
 

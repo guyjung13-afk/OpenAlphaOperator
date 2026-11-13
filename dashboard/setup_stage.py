@@ -90,7 +90,7 @@ def render_integration_status_strip() -> None:
         skipped = bool(r and r.get("skipped"))
         with cols[i % 4]:
             st.caption(f"{_status_dot(ok, skipped=skipped)} {integ['label'].split('(')[0].strip()}")
-    if st.button("⚙ Open Setup", key="open_setup_from_strip", use_container_width=True):
+    if st.button("⚙ Open Setup", key="open_setup_from_strip", width="stretch"):
         st.session_state.show_setup = True
         st.session_state.force_setup = True
         st.rerun()
@@ -118,8 +118,8 @@ Demo mode needs <b>zero</b> logins.
 
     st.title("Connect real-time integrations")
     st.caption(
-        "Open-Meteo needs no login. EIA is optional. "
-        "Temporal, webhooks, and xAI are optional (durable fusion / notify / AI text)."
+        "Open-Meteo and ERCOT need no login. EIA and PJM are optional keys. "
+        "Ollama is a local model and is optional. Temporal is not required for the desk."
     )
 
     # Mode
@@ -129,7 +129,7 @@ Demo mode needs <b>zero</b> logins.
         ["Demo only (no logins required)", "Live integrations"],
         index=0 if demo_default else 1,
         horizontal=True,
-        help="Demo uses public feeds + synthetic math. Live saves optional EIA, Redis, and Temporal logins.",
+        help="Demo uses public feeds. Live saves optional EIA, PJM, Redis, and Temporal logins.",
     )
     want_demo = mode.startswith("Demo")
 
@@ -179,7 +179,7 @@ Demo mode needs <b>zero</b> logins.
 
             c1, c2 = st.columns([1, 3])
             with c1:
-                if st.button("Test connection", key=f"test_{iid}", use_container_width=True):
+                if st.button("Test connection", key=f"test_{iid}", width="stretch"):
                     fields = _collect_form_fields(integ, existing)
                     st.session_state.test_results[iid] = run_test(str(integ["test"]), fields)
                     st.rerun()
@@ -225,7 +225,7 @@ Demo mode needs <b>zero</b> logins.
     a1, a2, a3 = st.columns(3)
 
     with a1:
-        if st.button("Test all live", use_container_width=True):
+        if st.button("Test all live", width="stretch"):
             # Build temp creds from form
             merged = load_credentials()
             for integ in live_integrations():
@@ -238,7 +238,7 @@ Demo mode needs <b>zero</b> logins.
             st.rerun()
 
     with a2:
-        if st.button("Save credentials", type="primary", use_container_width=True):
+        if st.button("Save credentials", type="primary", width="stretch"):
             sections: dict[str, dict[str, Any]] = {
                 "app": {
                     "demo_mode": want_demo,
@@ -269,7 +269,7 @@ Demo mode needs <b>zero</b> logins.
 
     with a3:
         continue_label = "Continue to desk (demo)" if want_demo else "Continue to desk"
-        if st.button(continue_label, use_container_width=True):
+        if st.button(continue_label, width="stretch"):
             # Mark session as past setup even if not persisted
             st.session_state.setup_dismissed = True
             st.session_state.show_setup = False
