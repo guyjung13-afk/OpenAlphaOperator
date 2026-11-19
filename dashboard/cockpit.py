@@ -317,7 +317,7 @@ def _render_query_chart(frame: pd.DataFrame, unit: str) -> None:
     span = frame["chart_time"].max() - frame["chart_time"].min()
     if pd.isna(span):
         tickformat = "%H:%M"
-    elif span <= timedelta(hours=3):
+    elif span <= timedelta(hours=18):
         tickformat = "%H:%M"
     elif span <= timedelta(days=2):
         tickformat = "%b %d %H:%M"
@@ -379,7 +379,8 @@ def _render_query_result(result: dict[str, Any]) -> None:
     elif calls and not any(call.get("name") == "list_tags" for call in calls):
         st.info("No tag samples in that range.")
     note = (result.get("message") or "").strip()
-    if note:
+    # The chart/table already come from the tag store. Skip the model's own recap.
+    if note and not frames:
         st.caption(note)
 
 
