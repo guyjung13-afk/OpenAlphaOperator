@@ -165,7 +165,7 @@ def _render_query_result(result: dict[str, Any]) -> None:
             if tags:
                 st.dataframe(pd.DataFrame(tags), width="stretch", hide_index=True)
             continue
-        if name != "query_pi_tag":
+        if name not in {"query_pi_tag", "latest_pi_tag"}:
             continue
         if payload.get("source_state") == "unavailable" or payload.get("error") == "source unavailable":
             st.warning(f"{payload.get('tag')}: source unavailable")
@@ -178,6 +178,8 @@ def _render_query_result(result: dict[str, Any]) -> None:
                 f"{payload.get('tag')} {payload.get('agg')}",
                 _format_value(float(payload["aggregate_value"]), str(payload.get("unit") or "")),
             )
+        if payload.get("message"):
+            st.caption(str(payload["message"]))
         frames.extend(payload.get("points") or [])
     if frames:
         frame = pd.DataFrame(frames)
