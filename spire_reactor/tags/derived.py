@@ -118,3 +118,29 @@ def houston_north_spread(*, store: Any | None = None, quality: str = QUALITY_GOO
         "north": north,
         "missing": [],
     }
+
+
+def _value_at(store: Any, tag: str, at: datetime, *, quality: str = QUALITY_GOOD) -> TagSample | None:
+    sample = store.latest_at(tag, at, quality=quality)
+    if sample is None or sample.value is None:
+        return None
+    return sample
+
+
+def implied_heat_rate_at(at: datetime, *, store: Any | None = None, quality: str = QUALITY_GOOD) -> float | None:
+    store = store or get_store()
+    houston = _value_at(store, houston_lmp_tag(), at, quality=quality)
+    henry = _value_at(store, eia_price_tag(), at, quality=quality)
+    if houston is None or henry is None or float(henry.value) == 0:
+        return None
+    return float(houston.value) / float(henry.value)
+
+
+def houston_north_spread_at(at: datetime, *, store: Any | None = None, quality: str = QUALITY_GOOD) -> float | None:
+    store = store or get_store()
+    houston = _value_at(store, houston_lmp_tag(), at, quality=quality)
+    north = _value_at(store, north_lmp_tag(), at, quality=quality)
+    if houston is None or north is None:
+        return None
+    return float(houston.value) - float(north.value)
+

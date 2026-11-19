@@ -109,23 +109,48 @@ st.markdown(
 
     /* Page title — Real Time Desk (native st.title → h1) */
     h1, [data-testid="stMarkdownContainer"] h1 {
-        font-size: 1.85rem !important;
+        font-size: 1.55rem !important;
         font-weight: 800 !important;
         color: #0a0a0a !important;
         letter-spacing: -0.02em !important;
         line-height: 1.15 !important;
-        margin: 0.1rem 0 0.25rem 0 !important;
+        margin: 0 0 0.1rem 0 !important;
         padding: 0 !important;
     }
     /* Section titles (st.subheader / ###) */
     h2, h3,
     [data-testid="stMarkdownContainer"] h2,
     [data-testid="stMarkdownContainer"] h3 {
-        font-size: 1.05rem !important;
-        margin: 0.85rem 0 0.35rem 0 !important;
+        font-size: 0.95rem !important;
+        margin: 0.35rem 0 0.2rem 0 !important;
         color: #0a0a0a !important;
         font-weight: 800 !important;
     }
+    div.block-container {
+        /* padding-top stays 2.6rem so the title is not clipped by the header */
+        padding-bottom: 0.6rem !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stVerticalBlock"] { gap: 0.35rem !important; }
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        padding: 8px 10px 6px 10px;
+        min-height: 0;
+    }
+    div[data-testid="stMetric"] label { font-size: 0.78rem !important; }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.25rem !important; }
+    .desk-footer {
+        margin: 0.15rem 0 0.35rem 0;
+        padding: 4px 2px 0 2px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #4b5563;
+        letter-spacing: 0.01em;
+        border-top: 1px solid #e5e7eb;
+    }
+    .grid-pill { margin-left: 0.15rem; }
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3 {
@@ -137,7 +162,7 @@ st.markdown(
     .desk-bar {
         display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
         background: #f8fafc; border: 1px solid #d1d5db; border-radius: 4px;
-        padding: 8px 12px; margin: 0.15rem 0 0.45rem 0;
+        padding: 6px 10px; margin: 0.1rem 0 0.3rem 0;
         font-size: 0.88rem; color: #0a0a0a;
     }
     .desk-bar .muted { color: #4b5563; font-weight: 600; }
