@@ -47,7 +47,9 @@ st.markdown(
         background-color: #ffffff !important;
         color: #0a0a0a !important;
     }
-    [data-testid="stHeader"] { background: #ffffff !important; }
+    /* Hide the fixed Streamlit header so the title is not clipped. */
+    header[data-testid="stHeader"] { display: none !important; }
+    [data-testid="stHeader"] { display: none !important; }
     section[data-testid="stSidebar"] {
         background-color: #f8fafc !important;
         border-right: 1px solid #d1d5db;
@@ -60,17 +62,15 @@ st.markdown(
     }
 
     .block-container {
-        /* Clear fixed Streamlit header so title is never clipped */
-        padding-top: 2.6rem !important;
+        padding-top: 1.15rem !important;
         padding-bottom: 1.25rem !important;
         padding-left: 1.5rem !important;
         padding-right: 1.5rem !important;
         max-width: 100% !important;
         background: #ffffff !important;
     }
-    /* Breathing room between major blocks without sparse waste */
-    div[data-testid="stVerticalBlock"] { gap: 0.45rem; }
-    div[data-testid="stHorizontalBlock"] { gap: 0.65rem; }
+    div[data-testid="stVerticalBlock"] { gap: 0.55rem !important; }
+    div[data-testid="stHorizontalBlock"] { gap: 0.7rem !important; align-items: start !important; }
 
     /* Metrics — light tiles, black type */
     div[data-testid="stMetric"] {
@@ -96,7 +96,8 @@ st.markdown(
         border: 1px solid #d1d5db;
         border-radius: 4px;
         background: #ffffff;
-        margin-top: 0.35rem;
+        margin-top: 0.2rem;
+        margin-bottom: 0.2rem;
     }
 
     /* Captions slightly muted but still readable on white */
@@ -113,68 +114,110 @@ st.markdown(
         font-weight: 800 !important;
         color: #0a0a0a !important;
         letter-spacing: -0.02em !important;
-        line-height: 1.15 !important;
-        margin: 0 0 0.1rem 0 !important;
-        padding: 0 !important;
+        line-height: 1.2 !important;
+        margin: 0 0 0.15rem 0 !important;
+        padding: 0.15rem 0 0 0 !important;
+        overflow: visible !important;
     }
     /* Section titles (st.subheader / ###) */
     h2, h3,
     [data-testid="stMarkdownContainer"] h2,
     [data-testid="stMarkdownContainer"] h3 {
         font-size: 0.95rem !important;
-        margin: 0.35rem 0 0.2rem 0 !important;
+        margin: 0.7rem 0 0.3rem 0 !important;
         color: #0a0a0a !important;
         font-weight: 800 !important;
     }
     div.block-container {
-        /* padding-top stays 2.6rem so the title is not clipped by the header */
-        padding-bottom: 0.6rem !important;
+        padding-top: 1.15rem !important;
+        padding-bottom: 0.8rem !important;
         max-width: 100% !important;
     }
-    [data-testid="stVerticalBlock"] { gap: 0.35rem !important; }
-    div[data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #d1d5db;
-        border-radius: 4px;
-        padding: 8px 10px 6px 10px;
-        min-height: 0;
-    }
-    div[data-testid="stMetric"] label { font-size: 0.78rem !important; }
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.25rem !important; }
     .desk-footer {
-        margin: 0.15rem 0 0.35rem 0;
-        padding: 4px 2px 0 2px;
+        margin: 0.55rem 0 0.45rem 0;
+        padding: 8px 2px 0 2px;
         font-size: 0.78rem;
         font-weight: 600;
         color: #4b5563;
         letter-spacing: 0.01em;
         border-top: 1px solid #e5e7eb;
     }
-    .grid-pill { margin-left: 0.15rem; }
-    .derived-card {
+    .desk-row {
+        display: grid;
+        gap: 0.65rem;
+        margin: 0 0 0.65rem 0;
+        align-items: stretch;
+    }
+    .desk-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .desk-row-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .desk-card {
         background: #ffffff;
         border: 1px solid #d1d5db;
         border-radius: 4px;
-        padding: 8px 10px 6px 10px;
-        min-height: 100%;
+        padding: 8px 10px 8px 10px;
+        min-height: 118px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        overflow: hidden;
+        box-sizing: border-box;
     }
-    .derived-label {
-        font-size: 0.78rem;
-        font-weight: 650;
-        line-height: 1.3;
+    .desk-card-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
         color: #0a0a0a;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: unset;
-        margin-bottom: 0.2rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.2;
     }
-    .derived-value {
-        font-size: 1.25rem;
+    .desk-card-sub {
+        font-size: 0.68rem;
+        font-weight: 600;
+        color: #4b5563;
+        white-space: normal;
+        overflow: hidden;
+        line-height: 1.25;
+        min-height: 1.7rem;
+        max-height: 1.7rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+    .desk-card-value {
+        font-size: 1.22rem;
         font-weight: 700;
         color: #0a0a0a;
         line-height: 1.25;
-        white-space: normal;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin: 0.2rem 0 0.15rem 0;
     }
+    .desk-card-meta {
+        font-size: 0.68rem;
+        font-weight: 600;
+        color: #374151;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: auto;
+        line-height: 1.25;
+    }
+    .radar-head {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #0a0a0a;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        margin: 0 0 0.2rem 0;
+        line-height: 1.2;
+    }
+    [data-testid="stCheckbox"] { margin: 0 0 0.25rem 0 !important; padding: 0 !important; min-height: 0 !important; }
+    [data-testid="stCheckbox"] label p { font-size: 0.8rem !important; }
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3 {
@@ -184,25 +227,38 @@ st.markdown(
 
     /* Status strip */
     .desk-bar {
-        display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
+        display: flex; flex-direction: column; gap: 6px;
         background: #f8fafc; border: 1px solid #d1d5db; border-radius: 4px;
-        padding: 6px 10px; margin: 0.1rem 0 0.3rem 0;
-        font-size: 0.88rem; color: #0a0a0a;
+        padding: 7px 10px; margin: 0.15rem 0 0.65rem 0;
+        font-size: 0.8rem; color: #0a0a0a;
+    }
+    .desk-bar-row {
+        display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;
+        min-width: 0;
+    }
+    .desk-bar-clock {
+        margin-left: auto;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #4b5563;
+        white-space: nowrap;
     }
     .desk-bar .muted { color: #4b5563; font-weight: 600; }
     .desk-bar strong { color: #0a0a0a; font-weight: 800; }
 
     .desk-badge {
-        display: inline-block; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em;
+        display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0;
         padding: 3px 8px; border-radius: 3px; text-transform: none;
         border: 1px solid transparent; white-space: nowrap;
     }
     .desk-chip {
-        display: inline-flex; align-items: baseline; gap: 0.35rem;
+        display: inline-flex; align-items: baseline; gap: 0.3rem;
     }
+    .desk-chip .chip-name { font-weight: 800; }
     .desk-chip .chip-asof {
         font-weight: 600; letter-spacing: 0; opacity: 0.88;
     }
+    .grid-pill { margin-left: 0; }
     /* !important so badge colors beat any global span rules */
     .desk-badge.badge-lake { background: #dcfce7 !important; color: #14532d !important; border-color: #86efac !important; }
     .desk-badge.badge-ritual { background: #dbeafe !important; color: #1e3a8a !important; border-color: #93c5fd !important; }

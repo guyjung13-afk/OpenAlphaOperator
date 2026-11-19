@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from spire_reactor.ingest.ercot_grid import fetch_ercot_grid
-from spire_reactor.ingest.ercot_lmp import fetch_ercot_lmp
+from spire_reactor.ingest.ercot_lmp import backfill_ercot_around, fetch_ercot_lmp
 from spire_reactor.ingest.pjm_lmp import fetch_pjm_lmp
 from spire_reactor.ingest.public_feeds import (
     DEFAULT_LAT,
@@ -271,6 +271,26 @@ def _write_desk_health_file(health: list[dict[str, Any]], mode: str) -> None:
 def _ercot_feed() -> dict[str, Any]:
     """Public hub prices plus PRC/EEA. A grid failure does not drop LMP samples."""
     prices = fetch_ercot_lmp()
+    # If the in-process/cached series does not yet reach ~24h, pull one public MIS interval.
+    try:
+        from spire_reactor.tags.schema import ercot_lmp_tag
+
+        store = get_store()
+        tag = ercot_lmp_tag("HB_HOUSTON")
+        ago = utc_now() - timedelta(hours=24)
+        have = store.latest_at(tag, ago)
+        newest_backfill = None
+        for row in prices.get("samples") or []:
+            ts = row.get("ts")
+            if isinstance(ts, datetime) and ts.tzinfo is not None and ts <= ago:
+                newest_backfill = ts if newest_backfill is None or ts > newest_backfill else newest_backfill
+        if have is None and newest_backfill is None:
+            extra = backfill_ercot_around(ago)
+            if extra:
+                prices = dict(prices)
+                prices["samples"] = list(prices.get("samples") or []) + extra
+    except Exception:  # noqa: BLE001 — live prices still stand without the 24h point
+        pass
     try:
         grid = fetch_ercot_grid()
     except Exception as exc:  # noqa: BLE001
