@@ -79,9 +79,17 @@ def format_age(seconds: float | None, *, daily: bool = False) -> str:
 
 def _as_of_label(moment: datetime, *, daily: bool) -> str:
     if daily:
-        return format_period_date(moment)
-    local = moment.astimezone(desk_timezone())
-    return local.strftime("%H:%M %Z")
+        iso = format_period_date(moment)
+        try:
+            _year, month, day = iso.split("-")
+            months = (
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+            )
+            return f"{months[int(month) - 1]} {int(day)}"
+        except (ValueError, IndexError):
+            return iso
+    return moment.astimezone(desk_timezone()).strftime("%H:%M CT")
 
 
 def _cutoffs_for(source: str, as_of: datetime, now: datetime) -> tuple[str, float]:
