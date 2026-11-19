@@ -35,7 +35,9 @@ from spire_reactor.tags.schema import (
     desk_timezone,
     desk_timezone_name,
     eia_price_tag,
+    ercot_eea_tag,
     ercot_lmp_tag,
+    ercot_prc_tag,
     format_local,
     format_period_date,
     key_tags,
@@ -342,7 +344,18 @@ def _eia_history_chart(spec: Any) -> None:
 
 
 
-def _derived_metric(title: str, value: str, caption: str) -> None:
+def _derived_metric(title: str, value: str, caption: str, *, wrap_label: bool = False) -> None:
+    if wrap_label:
+        st.markdown(
+            '<div class="derived-card">'
+            f'<div class="derived-label">{html.escape(title)}</div>'
+            f'<div class="derived-value">{html.escape(value)}</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        if caption:
+            st.caption(caption)
+        return
     st.metric(title, value)
     st.caption(caption)
 
@@ -388,10 +401,11 @@ def _heat_rate_and_spread_row() -> None:
                 heat["label"],
                 f"{heat['value']:.2f} {heat['unit']}",
                 f"{when}" + (f" · {deltas}" if deltas else ""),
+                wrap_label=True,
             )
         else:
             missing = ", ".join(heat["missing"]) or "inputs unavailable"
-            _derived_metric(heat["label"], "—", missing)
+            _derived_metric(heat["label"], "—", missing, wrap_label=True)
     with right:
         if spread["ok"]:
             history = store.series(
@@ -405,10 +419,14 @@ def _heat_rate_and_spread_row() -> None:
             houston_when = format_local(spread["houston"].ts_utc)
             north_when = format_local(spread["north"].ts_utc)
             deltas = _derived_delta_line(float(spread["value"]), prior, ago, spread["unit"])
+            if houston_when == north_when:
+                when_line = houston_when
+            else:
+                when_line = f"Houston {houston_when} · North {north_when}"
             _derived_metric(
                 spread["label"],
                 f"{spread['value']:.2f} {spread['unit']}",
-                f"HB_HOUSTON {houston_when} · HB_NORTH {north_when}" + (f" · {deltas}" if deltas else ""),
+                when_line + (f" · {deltas}" if deltas else ""),
             )
         else:
             missing = ", ".join(spread["missing"]) or "inputs unavailable"
@@ -476,7 +494,23 @@ def _lmp_threshold_chart() -> None:
 
 def _grid_pills_html() -> str:
     snapshot = load_grid_snapshot() or {}
-    if not snapshot.get("ok"):
+    store = get_store()
+    quality = QUALITY_SYNTHETIC if store.mode() == "synthetic" else "good"
+    prc_sample = store.latest(ercot_prc_tag(), quality=quality)
+    eea_sample = store.latest(ercot_eea_tag(), quality=quality)
+    prc = snapshot.get("prc_mw")
+    if prc is None and prc_sample is not None and prc_sample.value is not None:
+        prc = float(prc_sample.value)
+    eea = snapshot.get("eea_level")
+    if eea is None and eea_sample is not None and eea_sample.value is not None:
+        eea = eea_sample.value
+    observed = snapshot.get("observed_at")
+    if observed is None:
+        times = [row.ts_utc for row in (prc_sample, eea_sample) if row is not None]
+        observed = max(times) if times else None
+    title = str(snapshot.get("title") or snapshot.get("state_name") or "").strip()
+    have_values = prc is not None or eea is not None
+    if snapshot.get("ok") is False and not have_values:
         reason = str(snapshot.get("reason") or snapshot.get("message") or "no public PRC/EEA reading yet").strip()
         return (
             '<span class="desk-chip desk-badge badge-muted grid-pill">'
@@ -485,28 +519,36 @@ def _grid_pills_html() -> str:
             f'<span class="chip-asof">{html.escape(reason)}</span>'
             "</span>"
         )
-    prc = snapshot.get("prc_mw")
-    eea = snapshot.get("eea_level")
-    title = str(snapshot.get("title") or snapshot.get("state_name") or "").strip()
-    observed = snapshot.get("observed_at")
+    if not have_values and not snapshot.get("ok"):
+        reason = str(snapshot.get("reason") or snapshot.get("message") or "no public PRC/EEA reading yet").strip()
+        return (
+            '<span class="desk-chip desk-badge badge-muted grid-pill">'
+            '<span class="chip-name">Grid</span> '
+            '<span class="chip-state">unavailable</span>'
+            f'<span class="chip-asof">{html.escape(reason)}</span>'
+            "</span>"
+        )
     as_of = _clock(observed) if observed is not None else ""
     prc_text = f"{float(prc):,.0f} MW" if isinstance(prc, (int, float)) else "—"
     try:
         level = int(eea) if eea is not None else None
     except (TypeError, ValueError):
         level = None
+    if not title:
+        if level is None:
+            title = "unavailable"
+        elif level <= 0:
+            title = "Normal Conditions"
+        else:
+            title = f"EEA {level}"
     if level is None:
         eea_kind = "badge-muted"
-        eea_text = title or "unavailable"
     elif level <= 0:
         eea_kind = "badge-green"
-        eea_text = title or "Normal Conditions"
     elif level == 1:
         eea_kind = "badge-amber"
-        eea_text = title or "EEA 1"
     else:
         eea_kind = "badge-red"
-        eea_text = title or f"EEA {level}"
     eea_detail = f"EEA {level}" if level is not None else ""
     as_of_html = f'<span class="chip-asof">as of {html.escape(as_of)}</span>' if as_of else ""
     eea_extra = f'<span class="chip-asof">{html.escape(eea_detail)}</span>' if eea_detail else ""
@@ -520,7 +562,7 @@ def _grid_pills_html() -> str:
     eea_pill = (
         f'<span class="desk-chip desk-badge {eea_kind} grid-pill">'
         '<span class="chip-name">EEA</span> '
-        f'<span class="chip-state">{html.escape(eea_text)}</span>'
+        f'<span class="chip-state">{html.escape(title)}</span>'
         f"{eea_extra}"
         "</span>"
     )

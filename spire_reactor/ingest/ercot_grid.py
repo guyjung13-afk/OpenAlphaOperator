@@ -80,13 +80,22 @@ def _parse_eea(raw: Any) -> int | None:
         return None
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _write_snapshot(payload: dict[str, Any]) -> None:
     try:
         _SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
-        serializable = dict(payload)
-        observed = serializable.get("observed_at")
-        if isinstance(observed, datetime):
-            serializable["observed_at"] = observed.astimezone(timezone.utc).isoformat()
+        serializable = _json_safe(dict(payload))
+        # Samples already live in the tag store; keep the file small and title-focused.
+        serializable.pop("samples", None)
         _SNAPSHOT.write_text(json.dumps(serializable, indent=2) + "\n", encoding="utf-8")
     except Exception:  # noqa: BLE001 — snapshot must not take the desk down
         return
