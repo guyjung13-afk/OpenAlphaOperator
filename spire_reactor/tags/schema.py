@@ -122,6 +122,14 @@ def ercot_lmp_tag(entity: str) -> str:
     return tag_name("ERCOT", entity, "LMP")
 
 
+def ercot_prc_tag() -> str:
+    return tag_name("ERCOT", "GRID", "PRC_MW")
+
+
+def ercot_eea_tag() -> str:
+    return tag_name("ERCOT", "GRID", "EEA_LEVEL")
+
+
 def pjm_lmp_tag(hub_name: str) -> str:
     return tag_name("PJM", hub_name, "LMP")
 
@@ -214,7 +222,29 @@ def _ercot_specs() -> list[TagSpec]:
     return specs
 
 
+def _ercot_grid_specs() -> list[TagSpec]:
+    return [
+        TagSpec(
+            tag=ercot_prc_tag(),
+            source="ercot",
+            unit="MW",
+            description="ERCOT Physical Responsive Capability from the public daily PRC dashboard",
+            cadence="instant",
+            key=False,
+        ),
+        TagSpec(
+            tag=ercot_eea_tag(),
+            source="ercot",
+            unit="level",
+            description="ERCOT Energy Emergency Alert level (0 = normal) from the public daily PRC dashboard",
+            cadence="instant",
+            key=False,
+        ),
+    ]
+
+
 def _pjm_specs() -> list[TagSpec]:
+
     return [
         TagSpec(
             tag=pjm_lmp_tag(hub),
@@ -234,6 +264,7 @@ def catalog() -> dict[str, TagSpec]:
         *_weather_specs(),
         *_eia_specs(),
         *_ercot_specs(),
+        *_ercot_grid_specs(),
         *_pjm_specs(),
     )
     return {spec.tag: spec for spec in specs}

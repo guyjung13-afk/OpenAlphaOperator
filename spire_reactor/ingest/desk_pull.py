@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from spire_reactor.ingest.ercot_grid import fetch_ercot_grid
 from spire_reactor.ingest.ercot_lmp import fetch_ercot_lmp
 from spire_reactor.ingest.pjm_lmp import fetch_pjm_lmp
 from spire_reactor.ingest.public_feeds import (
@@ -267,7 +268,36 @@ def _write_desk_health_file(health: list[dict[str, Any]], mode: str) -> None:
         return
 
 
+def _ercot_feed() -> dict[str, Any]:
+    """Public hub prices plus PRC/EEA. A grid failure does not drop LMP samples."""
+    prices = fetch_ercot_lmp()
+    try:
+        grid = fetch_ercot_grid()
+    except Exception as exc:  # noqa: BLE001
+        grid = {
+            "ok": False,
+            "source": "ercot-grid",
+            "state": "unavailable",
+            "message": f"daily-prc.json unavailable: {exc}",
+            "reason": f"request failed: {exc}",
+            "samples": [],
+        }
+    samples = list(prices.get("samples") or [])
+    if grid.get("ok"):
+        samples.extend(grid.get("samples") or [])
+    message = str(prices.get("message") or "").strip()
+    grid_msg = str(grid.get("message") or grid.get("reason") or "").strip()
+    if grid_msg:
+        message = f"{message}; {grid_msg}" if message else grid_msg
+    out = dict(prices)
+    out["samples"] = samples
+    out["grid"] = grid
+    out["message"] = message
+    return out
+
+
 def _pjm_feed(api_key: str) -> dict[str, Any]:
+
     if not api_key:
         return {
             "source": "pjm",
@@ -285,7 +315,7 @@ def _pull_feeds() -> list[dict[str, Any]]:
     jobs = {
         "open-meteo": lambda: _weather_feed(DEFAULT_LAT, DEFAULT_LON),
         "eia": lambda: _eia_feed(eia_key),
-        "ercot": fetch_ercot_lmp,
+        "ercot": _ercot_feed,
         "pjm": lambda: _pjm_feed(pjm_key),
     }
     feeds: dict[str, dict[str, Any]] = {}

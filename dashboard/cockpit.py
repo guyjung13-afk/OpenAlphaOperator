@@ -21,13 +21,21 @@ from spire_reactor.ingest.desk_pull import (
     load_synthetic_desk,
     summarize,
 )
+from spire_reactor.ingest.ercot_grid import load_grid_snapshot
 from spire_reactor.ingest.public_feeds import DEFAULT_LAT, DEFAULT_LON, fetch_radar_overlay
 from spire_reactor.model.ollama_desk import ask_desk, ollama_model, probe_ollama
-from spire_reactor.tags.derived import houston_north_spread, implied_heat_rate
+from spire_reactor.tags.derived import (
+    houston_north_spread,
+    houston_north_spread_at,
+    implied_heat_rate,
+    implied_heat_rate_at,
+)
 from spire_reactor.tags.schema import (
     QUALITY_SYNTHETIC,
     desk_timezone,
     desk_timezone_name,
+    eia_price_tag,
+    ercot_lmp_tag,
     format_local,
     format_period_date,
     key_tags,
@@ -39,11 +47,26 @@ from spire_reactor.tags.store import get_store
 
 from dashboard.setup_stage import render_integration_status_strip
 
-_UNIT_LABEL = {"degC": "°C"}
+_UNIT_LABEL = {"degC": "°F", "km/h": "mph"}
+LMP_THRESHOLD_USD = 100.0
+LMP_CHART_HOURS = 24
+DESK_FOOTER = "Public data only. No recommendations or trading signals."
 
 
-def _shown_unit(unit: str) -> str:
+def _shown_unit(unit: str, tag: str = "") -> str:
+    if unit == "degC" or tag.endswith(".TEMP_C"):
+        return "°F"
+    if unit == "km/h" or tag.endswith(".WIND_KMH"):
+        return "mph"
     return _UNIT_LABEL.get(unit, unit)
+
+
+def _to_display(value: float, unit: str, tag: str = "") -> float:
+    if unit == "degC" or tag.endswith(".TEMP_C"):
+        return value * 9.0 / 5.0 + 32.0
+    if unit == "km/h" or tag.endswith(".WIND_KMH"):
+        return value / 1.609344
+    return value
 
 
 def _clock(moment: Any) -> str:
@@ -72,14 +95,59 @@ def _tile_label(spec: Any) -> str:
     return str(spec.tag)
 
 
-def _format_value(value: float, unit: str) -> str:
-    if unit == "%":
-        text = f"{value:.0f}"
-    elif unit == "degC":
-        text = f"{value:.1f}"
+def _format_value(value: float, unit: str, tag: str = "") -> str:
+    shown = _to_display(value, unit, tag)
+    shown_unit = _shown_unit(unit, tag)
+    if shown_unit == "%":
+        text = f"{shown:.0f}"
+    elif shown_unit in {"°F", "°C"}:
+        text = f"{shown:.1f}"
+    elif shown_unit == "mph":
+        text = f"{shown:.1f}"
     else:
-        text = f"{value:.2f}"
-    return f"{text} {_shown_unit(unit)}"
+        text = f"{shown:.2f}"
+    return f"{text} {shown_unit}"
+
+
+def _format_delta(delta: float, unit: str, tag: str = "") -> str:
+    shown_unit = _shown_unit(unit, tag)
+    if shown_unit == "%":
+        return f"{delta:+.0f}"
+    if shown_unit in {"°F", "°C", "mph"}:
+        return f"{delta:+.1f}"
+    return f"{delta:+.2f}"
+
+
+def _prior_and_ago(store: Any, tag: str, sample: Any, *, quality: str, cadence: str) -> tuple[Any, Any]:
+    """Previous stored interval, and the sample from ~24h earlier. EIA uses the prior trading day only."""
+    if cadence == "daily":
+        history = store.series(tag, sample.ts_utc - timedelta(days=21), sample.ts_utc - timedelta(seconds=1), quality=quality)
+        prior = history[-1] if history else None
+        return prior, None
+    history = store.series(
+        tag,
+        sample.ts_utc - timedelta(hours=6),
+        sample.ts_utc - timedelta(seconds=1),
+        quality=quality,
+    )
+    prior = history[-1] if history else None
+    ago = store.latest_at(tag, sample.ts_utc - timedelta(hours=24), quality=quality)
+    if ago is not None and ago.ts_utc == sample.ts_utc:
+        ago = None
+    return prior, ago
+
+
+def _delta_caption(sample: Any, prior: Any, ago: Any, unit: str, tag: str, *, daily: bool) -> str:
+    parts: list[str] = []
+    current = _to_display(float(sample.value), unit, tag)
+    if prior is not None and prior.value is not None:
+        previous = _to_display(float(prior.value), unit, tag)
+        label = "vs prior day" if daily else "vs prior"
+        parts.append(f"{_format_delta(current - previous, unit, tag)} {label}")
+    if not daily and ago is not None and ago.value is not None:
+        previous = _to_display(float(ago.value), unit, tag)
+        parts.append(f"{_format_delta(current - previous, unit, tag)} vs 24h")
+    return " · ".join(parts)
 
 
 def _freshness_kind(freshness: str) -> str:
@@ -150,7 +218,7 @@ def _ollama_status() -> dict[str, Any]:
     return cached
 
 
-def _tile(spec: Any, *, show_sparkline: bool = True) -> None:
+def _tile(spec: Any, *, show_sparkline: bool = False) -> None:
     store = get_store()
     health = store.health_for(spec.source) or {}
     state = str(health.get("state") or "unavailable")
@@ -161,17 +229,19 @@ def _tile(spec: Any, *, show_sparkline: bool = True) -> None:
         st.caption("source unavailable")
         return
     prefix = "SYNTHETIC " if sample.quality == QUALITY_SYNTHETIC else ""
-    st.metric(_tile_label(spec), prefix + _format_value(float(sample.value), spec.unit))
+    st.metric(_tile_label(spec), prefix + _format_value(float(sample.value), spec.unit, spec.tag))
     window = timedelta(days=90) if spec.cadence == "daily" else timedelta(hours=36)
     points = store.series(spec.tag, utc_now() - window, utc_now(), quality=quality)
     if show_sparkline and len(points) >= 2:
         frame = pd.DataFrame(
-            {"value": [point.value for point in points]},
-            index=pd.to_datetime([point.ts_utc for point in points], utc=True),
+            {"value": [_to_display(float(point.value), spec.unit, spec.tag) for point in points if point.value is not None]},
+            index=pd.to_datetime([point.ts_utc for point in points if point.value is not None], utc=True),
         )
         st.line_chart(frame, height=72)
     when = format_period_date(sample.ts_utc) if spec.cadence == "daily" else format_local(sample.ts_utc)
-    st.caption(when)
+    prior, ago = _prior_and_ago(store, spec.tag, sample, quality=quality, cadence=spec.cadence)
+    deltas = _delta_caption(sample, prior, ago, spec.unit, spec.tag, daily=spec.cadence == "daily")
+    st.caption(f"{when}" + (f" · {deltas}" if deltas else ""))
 
 
 def _radar_as_of_caption(radar: dict[str, Any]) -> str:
@@ -190,7 +260,7 @@ def _radar_as_of_caption(radar: dict[str, Any]) -> str:
     return "radar as of unknown time"
 
 
-def _weather_radar_map() -> None:
+def _weather_radar_map(*, height: int = 260) -> None:
     """Houston/ERCOT weather map with a live public radar overlay. Hidden on fetch failure."""
     show = st.checkbox("Radar overlay", value=True, key="wx_radar_overlay")
     radar: dict[str, Any] = fetch_radar_overlay() if show else {}
@@ -224,7 +294,7 @@ def _weather_radar_map() -> None:
             "layers": layers,
         },
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        height=300,
+        height=height,
         paper_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
@@ -277,33 +347,188 @@ def _derived_metric(title: str, value: str, caption: str) -> None:
     st.caption(caption)
 
 
+def _derived_delta_line(current: float, prior: float | None, ago: float | None, unit: str, *, daily: bool = False) -> str:
+    parts: list[str] = []
+    if prior is not None:
+        label = "vs prior day" if daily else "vs prior"
+        parts.append(f"{current - prior:+.2f} {label}")
+    if ago is not None:
+        parts.append(f"{current - ago:+.2f} vs 24h")
+    if unit and parts:
+        return " · ".join(parts) + f" {unit}"
+    return " · ".join(parts)
+
+
 def _heat_rate_and_spread_row() -> None:
     store = get_store()
-    heat = implied_heat_rate(store=store)
-    spread = houston_north_spread(store=store)
-    left, right = st.columns(2)
+    quality = QUALITY_SYNTHETIC if store.mode() == "synthetic" else "good"
+    heat = implied_heat_rate(store=store, quality=quality)
+    spread = houston_north_spread(store=store, quality=quality)
+    left, mid, right = st.columns(3)
+    henry_spec = next((spec for spec in key_tags() if spec.tag == eia_price_tag()), None)
     with left:
+        if henry_spec is not None:
+            _tile(henry_spec, show_sparkline=False)
+        else:
+            st.metric("Henry Hub", "—")
+            st.caption("source unavailable")
+    with mid:
         if heat["ok"]:
+            history = store.series(
+                heat["houston"].tag,
+                heat["houston"].ts_utc - timedelta(hours=6),
+                heat["houston"].ts_utc - timedelta(seconds=1),
+                quality=quality,
+            )
+            prior = implied_heat_rate_at(history[-1].ts_utc, store=store, quality=quality) if history else None
+            ago = implied_heat_rate_at(heat["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
+            when = format_local(heat["houston"].ts_utc)
+            deltas = _derived_delta_line(float(heat["value"]), prior, ago, heat["unit"])
             _derived_metric(
                 heat["label"],
                 f"{heat['value']:.2f} {heat['unit']}",
-                f"Houston LMP as of {format_local(heat['houston'].ts_utc)}",
+                f"{when}" + (f" · {deltas}" if deltas else ""),
             )
         else:
             missing = ", ".join(heat["missing"]) or "inputs unavailable"
             _derived_metric(heat["label"], "—", missing)
     with right:
         if spread["ok"]:
+            history = store.series(
+                spread["houston"].tag,
+                spread["houston"].ts_utc - timedelta(hours=6),
+                spread["houston"].ts_utc - timedelta(seconds=1),
+                quality=quality,
+            )
+            prior = houston_north_spread_at(history[-1].ts_utc, store=store, quality=quality) if history else None
+            ago = houston_north_spread_at(spread["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
             houston_when = format_local(spread["houston"].ts_utc)
             north_when = format_local(spread["north"].ts_utc)
+            deltas = _derived_delta_line(float(spread["value"]), prior, ago, spread["unit"])
             _derived_metric(
                 spread["label"],
                 f"{spread['value']:.2f} {spread['unit']}",
-                f"HB_HOUSTON as of {houston_when} · HB_NORTH as of {north_when}",
+                f"HB_HOUSTON {houston_when} · HB_NORTH {north_when}" + (f" · {deltas}" if deltas else ""),
             )
         else:
             missing = ", ".join(spread["missing"]) or "inputs unavailable"
             _derived_metric(spread["label"], "—", missing)
+
+
+def _count_threshold_crossings(values: list[float], threshold: float = LMP_THRESHOLD_USD) -> int:
+    count = 0
+    for left, right in zip(values, values[1:], strict=False):
+        if (left - threshold) * (right - threshold) < 0:
+            count += 1
+        elif left != threshold and right == threshold:
+            count += 1
+    return count
+
+
+def _lmp_threshold_chart() -> None:
+    store = get_store()
+    quality = QUALITY_SYNTHETIC if store.mode() == "synthetic" else "good"
+    tag = ercot_lmp_tag("HB_HOUSTON")
+    end = utc_now()
+    start = end - timedelta(hours=LMP_CHART_HOURS)
+    points = [row for row in store.series(tag, start, end, quality=quality) if row.value is not None]
+    st.markdown("**Houston LMP**")
+    if len(points) < 2:
+        st.caption("Not enough Houston LMP samples in the last 24 hours for a chart.")
+        return
+    frame = pd.DataFrame(
+        {
+            "time": pd.to_datetime([point.ts_utc for point in points], utc=True).tz_convert(desk_timezone()),
+            "USD/MWh": [float(point.value) for point in points],
+        }
+    )
+    chart = px.line(frame, x="time", y="USD/MWh")
+    chart.update_traces(line={"width": 2, "color": "#0f172a"}, hovertemplate="%{x|%H:%M}<br>%{y:.2f} USD/MWh<extra></extra>")
+    chart.add_hline(
+        y=LMP_THRESHOLD_USD,
+        line_dash="dot",
+        line_color="#b45309",
+        line_width=1.5,
+        annotation_text="$100/MWh threshold",
+        annotation_position="top left",
+        annotation_font_size=11,
+        annotation_font_color="#b45309",
+    )
+    chart.update_xaxes(tickformat="%H:%M", nticks=8, title="", showgrid=False, ticks="outside")
+    chart.update_yaxes(title="USD/MWh", gridcolor="#e5e7eb", zeroline=False, ticks="outside")
+    chart.update_layout(
+        height=220,
+        margin=dict(l=8, r=8, t=16, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="x unified",
+        showlegend=False,
+    )
+    st.plotly_chart(chart, width="stretch", config={"displayModeBar": False})
+    crossings = _count_threshold_crossings([float(point.value) for point in points])
+    first = _clock(points[0].ts_utc)
+    last = _clock(points[-1].ts_utc)
+    st.caption(
+        f"$100/MWh threshold line · {crossings} crossing"
+        f"{'' if crossings == 1 else 's'} in this window · {first}–{last}"
+    )
+
+
+def _grid_pills_html() -> str:
+    snapshot = load_grid_snapshot() or {}
+    if not snapshot.get("ok"):
+        reason = str(snapshot.get("reason") or snapshot.get("message") or "no public PRC/EEA reading yet").strip()
+        return (
+            '<span class="desk-chip desk-badge badge-muted grid-pill">'
+            '<span class="chip-name">Grid</span> '
+            '<span class="chip-state">unavailable</span>'
+            f'<span class="chip-asof">{html.escape(reason)}</span>'
+            "</span>"
+        )
+    prc = snapshot.get("prc_mw")
+    eea = snapshot.get("eea_level")
+    title = str(snapshot.get("title") or snapshot.get("state_name") or "").strip()
+    observed = snapshot.get("observed_at")
+    as_of = _clock(observed) if observed is not None else ""
+    prc_text = f"{float(prc):,.0f} MW" if isinstance(prc, (int, float)) else "—"
+    try:
+        level = int(eea) if eea is not None else None
+    except (TypeError, ValueError):
+        level = None
+    if level is None:
+        eea_kind = "badge-muted"
+        eea_text = title or "unavailable"
+    elif level <= 0:
+        eea_kind = "badge-green"
+        eea_text = title or "Normal Conditions"
+    elif level == 1:
+        eea_kind = "badge-amber"
+        eea_text = title or "EEA 1"
+    else:
+        eea_kind = "badge-red"
+        eea_text = title or f"EEA {level}"
+    eea_detail = f"EEA {level}" if level is not None else ""
+    as_of_html = f'<span class="chip-asof">as of {html.escape(as_of)}</span>' if as_of else ""
+    eea_extra = f'<span class="chip-asof">{html.escape(eea_detail)}</span>' if eea_detail else ""
+    prc_pill = (
+        '<span class="desk-chip desk-badge badge-green grid-pill">'
+        '<span class="chip-name">PRC</span> '
+        f'<span class="chip-state">{html.escape(prc_text)}</span>'
+        f"{as_of_html}"
+        "</span>"
+    )
+    eea_pill = (
+        f'<span class="desk-chip desk-badge {eea_kind} grid-pill">'
+        '<span class="chip-name">EEA</span> '
+        f'<span class="chip-state">{html.escape(eea_text)}</span>'
+        f"{eea_extra}"
+        "</span>"
+    )
+    return prc_pill + eea_pill
+
+
+def _desk_footer() -> None:
+    st.markdown(f'<div class="desk-footer">{html.escape(DESK_FOOTER)}</div>', unsafe_allow_html=True)
 
 
 @st.fragment(run_every=timedelta(seconds=60))
@@ -314,7 +539,7 @@ def _desk_fragment() -> None:
         st.warning("SYNTHETIC — offline sample, not a measurement. Refresh live feeds to clear it.")
 
     chips = " ".join(_feed_chip_html(row) for row in evaluate_all(store=store))
-    st.markdown(f'<div class="desk-bar">{chips}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="desk-bar">{chips} {_grid_pills_html()}</div>', unsafe_allow_html=True)
 
     fetched = store.fetched_at()
     clock = _clock(utc_now())
@@ -324,31 +549,34 @@ def _desk_fragment() -> None:
     grouped: dict[str, list[Any]] = {}
     for spec in key_tags():
         grouped.setdefault(spec.source, []).append(spec)
-    titles = {
-        "open-meteo": "Weather",
-        "eia": "EIA",
-        "ercot": "ERCOT",
-        "pjm": "PJM",
-    }
-    for source, specs in grouped.items():
-        if source == "pjm":
-            continue
-        st.subheader(titles.get(source, source))
-        if source == "open-meteo":
-            _weather_radar_map()
-        if source == "eia":
-            columns = st.columns(4)
-            for index, spec in enumerate(specs):
-                with columns[index % 4]:
-                    _tile(spec, show_sparkline=False)
-            _eia_history_chart(specs[0])
-            continue
-        columns = st.columns(min(4, len(specs)))
-        for index, spec in enumerate(specs):
+
+    weather = grouped.get("open-meteo") or []
+    if weather:
+        columns = st.columns(len(weather))
+        for index, spec in enumerate(weather):
+            with columns[index]:
+                _tile(spec, show_sparkline=False)
+
+    hubs = grouped.get("ercot") or []
+    if hubs:
+        columns = st.columns(min(4, len(hubs)))
+        for index, spec in enumerate(hubs):
             with columns[index % len(columns)]:
-                _tile(spec)
-        if source == "ercot":
-            _heat_rate_and_spread_row()
+                _tile(spec, show_sparkline=False)
+
+    left, right = st.columns([1.55, 1], gap="medium")
+    with left:
+        _heat_rate_and_spread_row()
+        _lmp_threshold_chart()
+    with right:
+        st.markdown("**Radar**")
+        _weather_radar_map(height=300)
+    _desk_footer()
+
+    eia_specs = grouped.get("eia") or []
+    if eia_specs:
+        with st.expander("Henry Hub history (90 days)", expanded=False):
+            _eia_history_chart(eia_specs[0])
 
     with st.expander("All public tags", expanded=False):
         rows = summarize().get("latest") or []
@@ -503,7 +731,7 @@ def render_cockpit() -> None:
     """Public-tag desk. Works with no model, no Temporal, and no Docker."""
     _ensure_feeds()
     st.title("Real Time Desk")
-    st.caption("Public feeds · times in CT.")
+    st.caption("Public feeds · times in CT. Public data only.")
     with st.sidebar:
         st.markdown("### Desk")
         st.checkbox("Auto refresh (60s)", value=True, key="auto_refresh")
