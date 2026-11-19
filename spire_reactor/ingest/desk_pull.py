@@ -277,14 +277,29 @@ def _ercot_feed() -> dict[str, Any]:
 
         store = get_store()
         tag = ercot_lmp_tag("HB_HOUSTON")
-        ago = utc_now() - timedelta(hours=24)
-        have = store.latest_at(tag, ago)
-        newest_backfill = None
+        latest = None
+        stored = store.latest(tag)
+        if stored is not None:
+            latest = stored.ts_utc
         for row in prices.get("samples") or []:
             ts = row.get("ts")
-            if isinstance(ts, datetime) and ts.tzinfo is not None and ts <= ago:
-                newest_backfill = ts if newest_backfill is None or ts > newest_backfill else newest_backfill
-        if have is None and newest_backfill is None:
+            if row.get("tag") != tag or not isinstance(ts, datetime):
+                continue
+            moment = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+            if latest is None or moment > latest:
+                latest = moment
+        ago = (latest or utc_now()) - timedelta(hours=24)
+        have = store.latest_at(tag, ago)
+        in_payload = False
+        for row in prices.get("samples") or []:
+            ts = row.get("ts")
+            if row.get("tag") != tag or not isinstance(ts, datetime):
+                continue
+            moment = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+            if moment <= ago:
+                in_payload = True
+                break
+        if have is None and not in_payload:
             extra = backfill_ercot_around(ago)
             if extra:
                 prices = dict(prices)
