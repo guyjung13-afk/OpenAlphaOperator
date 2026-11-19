@@ -46,6 +46,12 @@ stored.
 
 ## Query tools
 
-`query_pi_tag(tag, start, end, agg)` and `list_tags(filter)` read this store.
+`latest_pi_tag(tag)` returns the newest stored sample at or before now.
+`query_pi_tag(tag, start, end, agg)` reads a range. `list_tags(filter)` lists names.
 `agg` is `raw`, `avg`, `min`, `max`, or `last`. `start` / `end` are UTC
 ISO-8601, `now`, `-1h`, or `last 1 hour`. Naive timestamps are UTC.
+
+A missing window, a zero-width window (`start` and `end` both `now`), or an
+empty window shorter than 30 minutes is answered with that latest sample.
+Future timestamps are clamped to now. A wider range that contains no samples
+stays empty. The number always comes from the store.

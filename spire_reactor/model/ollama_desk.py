@@ -4,9 +4,9 @@ Turn a desk question into tag-store reads via a local Ollama model.
 Default server: http://127.0.0.1:11434
 Default model:  qwen3.5:9b  (OLLAMA_MODEL)
 
-The model may only call list_tags and query_pi_tag. Charts are drawn from
-those tool results. If the server is down, callers get ok=False and the
-dashboard hides the query panel.
+The model may only call list_tags, latest_pi_tag, and query_pi_tag. Charts are
+drawn from those tool results. If the server is down, callers get ok=False and
+the dashboard hides the query panel.
 """
 
 from __future__ import annotations
@@ -44,10 +44,29 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "latest_pi_tag",
+            "description": (
+                "Return the most recent stored sample for one tag. "
+                "Use this for latest, current, or now. Does not invent values."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tag": {"type": "string"},
+                },
+                "required": ["tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_pi_tag",
             "description": (
-                "Read stored public samples for one tag. "
+                "Read stored public samples for one tag over a time range. "
                 "start and end are UTC ISO-8601, now, -1h, or 'last 1 hour'. "
+                "start must be before end. Do not pass start=now and end=now; "
+                "use latest_pi_tag for the current value. "
                 "agg is raw, avg, min, max, or last. Does not invent values."
             ),
             "parameters": {
@@ -91,11 +110,15 @@ def system_prompt(now: datetime | None = None) -> str:
         f"Current time UTC: {moment.isoformat()}\n"
         f"Desk timezone: {tz_name}\n"
         f"Current time in {tz_name}: {local.isoformat()}\n"
-        "Resolve ranges such as 'last hour' from this clock into absolute UTC "
-        "before calling query_pi_tag. Use list_tags to discover tags and "
-        "query_pi_tag to read them. One query_pi_tag call per tag.\n"
+        "For latest, current, or most recent, call latest_pi_tag with the tag only. "
+        "Do not call query_pi_tag with start=now and end=now.\n"
+        "query_pi_tag is only for a range. Resolve 'last hour' from this clock "
+        "into absolute UTC with start before end. One call per tag.\n"
+        "A missing, zero-width, or very narrow window is answered with the latest "
+        "stored sample. Report that sample. Do not say it is unavailable.\n"
         f"Known tags: {names}\n"
-        "If a tool result says source unavailable, report that and do not supply a number."
+        "If a tool result says source unavailable or no stored sample, say that "
+        "and do not supply a number."
     )
 
 
@@ -124,6 +147,8 @@ def _arguments(raw: Any) -> dict[str, Any]:
 def _execute(name: str, arguments: dict[str, Any], store: TagStore) -> dict[str, Any]:
     if name == "list_tags":
         return {"tags": store.list_tags(str(arguments.get("filter") or ""))}
+    if name == "latest_pi_tag":
+        return store.latest_pi_tag(str(arguments.get("tag") or ""))
     if name == "query_pi_tag":
         return store.query_pi_tag(
             str(arguments.get("tag") or ""),

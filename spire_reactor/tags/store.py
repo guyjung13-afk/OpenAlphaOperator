@@ -18,6 +18,8 @@ from spire_reactor.tags.schema import (
 )
 
 _MAX_POINTS = 800
+# An empty window shorter than this can miss a 15-minute LMP tick.
+_NARROW_WINDOW = timedelta(minutes=30)
 _LAST = re.compile(
     r"^last\s+(\d+(?:\.\d+)?)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$",
     re.IGNORECASE,
@@ -55,6 +57,64 @@ def _delta(amount: str, unit: str) -> timedelta:
     if u.startswith("h"):
         return timedelta(hours=n)
     return timedelta(days=n)
+
+
+def _blank(text: str | None) -> bool:
+    return text is None or str(text).strip() == ""
+
+
+def resolve_query_window(
+    start: str | None,
+    end: str | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """
+    Clamp a model-supplied window.
+
+    A missing window or a zero-width window (including start=now, end=now)
+    is a latest-value read. Instants in the future are pulled back to ``now``.
+    """
+    start_missing = _blank(start)
+    end_missing = _blank(end)
+    if start_missing and end_missing:
+        return {
+            "mode": "latest",
+            "start": now,
+            "end": now,
+            "clamped": False,
+            "note": "missing window; latest stored sample",
+        }
+    end_dt = parse_time(None if end_missing else end, now=now, default=now)
+    if start_missing:
+        start_dt = end_dt - timedelta(hours=6)
+    else:
+        start_dt = parse_time(start, now=now, default=end_dt - timedelta(hours=6))
+    clamped = False
+    if end_dt > now:
+        end_dt = now
+        clamped = True
+    if start_dt > now:
+        start_dt = now
+        clamped = True
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+        clamped = True
+    if end_dt <= start_dt:
+        return {
+            "mode": "latest",
+            "start": start_dt,
+            "end": end_dt,
+            "clamped": clamped,
+            "note": "zero-width window; latest stored sample at or before the requested time",
+        }
+    note = "end clamped to now" if clamped else None
+    return {
+        "mode": "range",
+        "start": start_dt,
+        "end": end_dt,
+        "clamped": clamped,
+        "note": note,
+    }
 
 
 def parse_time(text: str | None, *, now: datetime, default: datetime) -> datetime:
@@ -183,6 +243,30 @@ class TagStore:
             return None
         return max(picked, key=lambda sample: sample.ts_utc)
 
+    def latest_at(
+        self,
+        tag: str,
+        at: datetime,
+        *,
+        quality: str = QUALITY_GOOD,
+    ) -> TagSample | None:
+        """Newest stored sample at or before ``at``. Does not invent a value."""
+        spec = spec_for(tag)
+        canonical = spec.tag if spec else tag
+        moment = at.astimezone(timezone.utc)
+        with self._lock:
+            bucket = list(self._points.get(canonical, {}).values())
+        picked = [
+            sample
+            for sample in bucket
+            if sample.quality == quality
+            and sample.value is not None
+            and sample.ts_utc.astimezone(timezone.utc) <= moment
+        ]
+        if not picked:
+            return None
+        return max(picked, key=lambda sample: sample.ts_utc)
+
     def list_tags(self, filter_text: str | None = None) -> list[dict[str, Any]]:
         needle = (filter_text or "").strip().lower()
         rows: list[dict[str, Any]] = []
@@ -213,6 +297,109 @@ class TagStore:
             "quality": QUALITY_GOOD if value is not None else None,
         }
 
+    def _unavailable_payload(
+        self,
+        spec: TagSpec,
+        state: str,
+        message: str,
+        start: datetime,
+        end: datetime,
+        agg: str,
+    ) -> dict[str, Any]:
+        return {
+            "tag": spec.tag,
+            "unit": spec.unit,
+            "source": spec.source,
+            "source_state": state,
+            "cadence": spec.cadence,
+            "agg": agg,
+            "resolved": "latest" if agg == "last" else "range",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "aggregate_value": None,
+            "points": [],
+            "error": "source unavailable",
+            "message": message or "source unavailable",
+        }
+
+    def _latest_payload(
+        self,
+        spec: TagSpec,
+        at: datetime,
+        *,
+        quality: str,
+        state: str,
+        note: str,
+        clamped: bool,
+    ) -> dict[str, Any]:
+        """One stored sample at or before ``at``. Empty when the store has none."""
+        sample = self.latest_at(spec.tag, at, quality=quality)
+        if sample is None or sample.value is None:
+            return {
+                "tag": spec.tag,
+                "unit": spec.unit,
+                "source": spec.source,
+                "source_state": state,
+                "cadence": spec.cadence,
+                "agg": "last",
+                "resolved": "latest",
+                "clamped": clamped,
+                "start": at.isoformat(),
+                "end": at.isoformat(),
+                "aggregate_value": None,
+                "points": [],
+                "error": "no stored sample",
+                "message": note,
+            }
+        return {
+            "tag": spec.tag,
+            "unit": spec.unit,
+            "source": spec.source,
+            "source_state": state,
+            "cadence": spec.cadence,
+            "agg": "last",
+            "resolved": "latest",
+            "clamped": clamped,
+            "start": sample.ts_utc.isoformat(),
+            "end": at.isoformat(),
+            "aggregate_value": round(float(sample.value), 4),
+            "points": [sample.to_dict()],
+            "error": None,
+            "message": note,
+        }
+
+    def latest_pi_tag(self, tag: str, *, quality: str = QUALITY_GOOD) -> dict[str, Any]:
+        """Most recent stored sample. Empty when the feed is down or the store has none."""
+        spec = spec_for(tag)
+        if spec is None:
+            return {
+                "tag": tag,
+                "error": "unknown tag",
+                "points": [],
+                "aggregate_value": None,
+                "source_state": "unavailable",
+            }
+        health = self.health_for(spec.source) or {}
+        state = str(health.get("state") or "unavailable")
+        now = utc_now()
+        if state == "unavailable":
+            return self._unavailable_payload(
+                spec,
+                state,
+                str(health.get("message") or "source unavailable"),
+                now,
+                now,
+                "last",
+            )
+        return self._latest_payload(
+            spec,
+            now,
+            quality=quality,
+            state=state,
+            note="latest stored sample",
+            clamped=False,
+        )
+
     def query_pi_tag(
         self,
         tag: str,
@@ -225,8 +412,10 @@ class TagStore:
         """
         Read stored samples for one catalog tag.
 
-        Missing tags and failed feeds return an empty point list. Values are
-        never filled in.
+        A missing window, a zero-width window, or an empty window shorter than
+        30 minutes returns the latest stored sample at or before the requested
+        time. Wider ranges stay empty when they contain no samples. Failed
+        feeds stay empty. Values are never filled in.
         """
         spec = spec_for(tag)
         if spec is None:
@@ -240,8 +429,7 @@ class TagStore:
         state = str(health.get("state") or "unavailable")
         now = utc_now()
         try:
-            end_dt = parse_time(end, now=now, default=now)
-            start_dt = parse_time(start, now=now, default=end_dt - timedelta(hours=6))
+            window = resolve_query_window(start, end, now)
         except ValueError as exc:
             return {
                 "tag": spec.tag,
@@ -250,8 +438,8 @@ class TagStore:
                 "points": [],
                 "source_state": state,
             }
-        if start_dt > end_dt:
-            start_dt, end_dt = end_dt, start_dt
+        start_dt = window["start"]
+        end_dt = window["end"]
         agg_name = (agg or "raw").strip().lower() or "raw"
         if agg_name not in _AGGS:
             return {
@@ -262,20 +450,33 @@ class TagStore:
                 "source_state": state,
             }
         if state == "unavailable":
-            return {
-                "tag": spec.tag,
-                "unit": spec.unit,
-                "source": spec.source,
-                "source_state": "unavailable",
-                "agg": agg_name,
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
-                "aggregate_value": None,
-                "points": [],
-                "error": "source unavailable",
-                "message": health.get("message") or "source unavailable",
-            }
+            return self._unavailable_payload(
+                spec,
+                state,
+                str(health.get("message") or "source unavailable"),
+                start_dt,
+                end_dt,
+                "last" if window["mode"] == "latest" else agg_name,
+            )
+        if window["mode"] == "latest":
+            return self._latest_payload(
+                spec,
+                end_dt,
+                quality=quality,
+                state=state,
+                note=str(window["note"] or "latest stored sample"),
+                clamped=bool(window["clamped"]),
+            )
         samples = self.series(spec.tag, start_dt, end_dt, quality=quality)
+        if not samples and (end_dt - start_dt) < _NARROW_WINDOW:
+            return self._latest_payload(
+                spec,
+                end_dt,
+                quality=quality,
+                state=state,
+                note="window narrower than 30 minutes and empty; latest stored sample",
+                clamped=bool(window["clamped"]),
+            )
         values = [sample.value for sample in samples if sample.value is not None]
         aggregate: float | None = None
         if values and agg_name == "avg":
@@ -293,11 +494,14 @@ class TagStore:
             "source_state": state,
             "cadence": spec.cadence,
             "agg": agg_name,
+            "resolved": "range",
+            "clamped": bool(window["clamped"]),
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "aggregate_value": None if aggregate is None else round(float(aggregate), 4),
             "points": [sample.to_dict() for sample in samples],
             "error": None,
+            "message": window["note"],
         }
 
 
