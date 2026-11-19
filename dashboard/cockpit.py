@@ -18,7 +18,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from spire_reactor.ingest.desk_pull import (
     collect_public_desk,
-    load_synthetic_desk,
     summarize,
 )
 from spire_reactor.ingest.ercot_grid import load_grid_snapshot
@@ -33,12 +32,10 @@ from spire_reactor.tags.derived import (
 from spire_reactor.tags.schema import (
     QUALITY_SYNTHETIC,
     desk_timezone,
-    desk_timezone_name,
     eia_price_tag,
     ercot_eea_tag,
     ercot_lmp_tag,
     ercot_prc_tag,
-    format_local,
     format_period_date,
     key_tags,
     utc_now,
@@ -72,7 +69,7 @@ def _to_display(value: float, unit: str, tag: str = "") -> float:
 
 
 def _clock(moment: Any) -> str:
-    return moment.astimezone(desk_timezone()).strftime("%H:%M %Z")
+    return moment.astimezone(desk_timezone()).strftime("%H:%M CT")
 
 
 def _tile_label(spec: Any) -> str:
@@ -120,6 +117,83 @@ def _format_delta(delta: float, unit: str, tag: str = "") -> str:
     return f"{delta:+.2f}"
 
 
+def _format_magnitude(delta: float, unit: str, tag: str = "") -> str:
+    return _format_delta(abs(delta), unit, tag).lstrip("+")
+
+
+def _arrow_delta(delta: float, unit: str, tag: str = "") -> str:
+    mag = _format_magnitude(delta, unit, tag)
+    if delta > 0:
+        return f"▲{mag}"
+    if delta < 0:
+        return f"▼{mag}"
+    return mag
+
+
+def _period_short(moment: Any) -> str:
+    iso = format_period_date(moment)
+    try:
+        year, month, day = iso.split("-")
+        months = (
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        )
+        return f"{months[int(month) - 1]} {int(day)}"
+    except (ValueError, IndexError):
+        return iso
+
+
+def _meta_line(
+    sample: Any,
+    prior: Any,
+    ago: Any,
+    unit: str,
+    tag: str,
+    *,
+    daily: bool,
+) -> str:
+    parts: list[str] = []
+    if daily:
+        parts.append(_period_short(sample.ts_utc))
+    else:
+        parts.append(_clock(sample.ts_utc))
+    current = _to_display(float(sample.value), unit, tag)
+    if prior is not None and prior.value is not None:
+        previous = _to_display(float(prior.value), unit, tag)
+        label = "vs prior day" if daily else "vs prior"
+        parts.append(f"{_arrow_delta(current - previous, unit, tag)} {label}")
+    if not daily and ago is not None and ago.value is not None:
+        previous = _to_display(float(ago.value), unit, tag)
+        parts.append(f"{_arrow_delta(current - previous, unit, tag)} vs 24h")
+    return " · ".join(parts)
+
+
+def _card_html(
+    *,
+    title: str,
+    value: str,
+    subtitle: str = "",
+    meta: str = "",
+) -> str:
+    sub = html.escape(subtitle) if subtitle else "&nbsp;"
+    meta_text = html.escape(meta) if meta else "&nbsp;"
+    return (
+        '<div class="desk-card">'
+        f'<div class="desk-card-title">{html.escape(title)}</div>'
+        f'<div class="desk-card-sub">{sub}</div>'
+        f'<div class="desk-card-value">{html.escape(value)}</div>'
+        f'<div class="desk-card-meta">{meta_text}</div>'
+        "</div>"
+    )
+
+
+def _card_row(cards: list[str], columns: int) -> None:
+    st.markdown(
+        f'<div class="desk-row desk-row-{columns}">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _prior_and_ago(store: Any, tag: str, sample: Any, *, quality: str, cadence: str) -> tuple[Any, Any]:
     """Previous stored interval, and the sample from ~24h earlier. EIA uses the prior trading day only."""
     if cadence == "daily":
@@ -137,19 +211,6 @@ def _prior_and_ago(store: Any, tag: str, sample: Any, *, quality: str, cadence: 
     if ago is not None and ago.ts_utc == sample.ts_utc:
         ago = None
     return prior, ago
-
-
-def _delta_caption(sample: Any, prior: Any, ago: Any, unit: str, tag: str, *, daily: bool) -> str:
-    parts: list[str] = []
-    current = _to_display(float(sample.value), unit, tag)
-    if prior is not None and prior.value is not None:
-        previous = _to_display(float(prior.value), unit, tag)
-        label = "vs prior day" if daily else "vs prior"
-        parts.append(f"{_format_delta(current - previous, unit, tag)} {label}")
-    if not daily and ago is not None and ago.value is not None:
-        previous = _to_display(float(ago.value), unit, tag)
-        parts.append(f"{_format_delta(current - previous, unit, tag)} vs 24h")
-    return " · ".join(parts)
 
 
 def _freshness_kind(freshness: str) -> str:
@@ -180,14 +241,20 @@ def _feed_chip_html(row: dict[str, Any]) -> str:
     word = html.escape(_freshness_word(row))
     kind = _freshness_kind(str(row.get("freshness") or "unavailable"))
     as_of = str(row.get("as_of_label") or "").strip()
+    if len(as_of) == 10 and as_of[4] == "-" and as_of[7] == "-":
+        try:
+            as_of = _period_short(row["as_of"]) if row.get("as_of") is not None else as_of
+        except Exception:  # noqa: BLE001
+            pass
+    elif as_of.endswith(" CST") or as_of.endswith(" CDT") or as_of.endswith(" UTC"):
+        as_of = as_of.rsplit(" ", 1)[0] + " CT"
     age = str(row.get("age_label") or "").strip()
     detail = ""
     if as_of and row.get("freshness") not in {"not_connected", "unavailable"}:
-        # Age is already the status word when stale; still show it next to as-of when live.
         if row.get("freshness") == "live" and age:
-            detail = f'<span class="chip-asof">as of {html.escape(as_of)} · {html.escape(age)}</span>'
+            detail = f'<span class="chip-asof">{html.escape(as_of)} · {html.escape(age)}</span>'
         else:
-            detail = f'<span class="chip-asof">as of {html.escape(as_of)}</span>'
+            detail = f'<span class="chip-asof">{html.escape(as_of)}</span>'
     return (
         f'<span class="desk-chip desk-badge {kind}">'
         f'<span class="chip-name">{name}</span> '
@@ -220,30 +287,25 @@ def _ollama_status() -> dict[str, Any]:
     return cached
 
 
-def _tile(spec: Any, *, show_sparkline: bool = False) -> None:
+def _spec_card_html(spec: Any) -> str:
     store = get_store()
     health = store.health_for(spec.source) or {}
     state = str(health.get("state") or "unavailable")
     quality = QUALITY_SYNTHETIC if state == "synthetic" else "good"
     sample = None if state in {"unavailable", "not_connected"} else store.latest(spec.tag, quality=quality)
+    title = _tile_label(spec)
+    subtitle = "EIA daily" if spec.source == "eia" else ""
     if sample is None or sample.value is None:
-        st.metric(_tile_label(spec), "—")
-        st.caption("source unavailable")
-        return
+        return _card_html(title=title, value="—", subtitle=subtitle, meta="unavailable")
     prefix = "SYNTHETIC " if sample.quality == QUALITY_SYNTHETIC else ""
-    st.metric(_tile_label(spec), prefix + _format_value(float(sample.value), spec.unit, spec.tag))
-    window = timedelta(days=90) if spec.cadence == "daily" else timedelta(hours=36)
-    points = store.series(spec.tag, utc_now() - window, utc_now(), quality=quality)
-    if show_sparkline and len(points) >= 2:
-        frame = pd.DataFrame(
-            {"value": [_to_display(float(point.value), spec.unit, spec.tag) for point in points if point.value is not None]},
-            index=pd.to_datetime([point.ts_utc for point in points if point.value is not None], utc=True),
-        )
-        st.line_chart(frame, height=72)
-    when = format_period_date(sample.ts_utc) if spec.cadence == "daily" else format_local(sample.ts_utc)
     prior, ago = _prior_and_ago(store, spec.tag, sample, quality=quality, cadence=spec.cadence)
-    deltas = _delta_caption(sample, prior, ago, spec.unit, spec.tag, daily=spec.cadence == "daily")
-    st.caption(f"{when}" + (f" · {deltas}" if deltas else ""))
+    meta = _meta_line(sample, prior, ago, spec.unit, spec.tag, daily=spec.cadence == "daily")
+    return _card_html(
+        title=title,
+        value=prefix + _format_value(float(sample.value), spec.unit, spec.tag),
+        subtitle=subtitle,
+        meta=meta,
+    )
 
 
 def _radar_as_of_caption(radar: dict[str, Any]) -> str:
@@ -344,93 +406,71 @@ def _eia_history_chart(spec: Any) -> None:
 
 
 
-def _derived_metric(title: str, value: str, caption: str, *, wrap_label: bool = False) -> None:
-    if wrap_label:
-        st.markdown(
-            '<div class="derived-card">'
-            f'<div class="derived-label">{html.escape(title)}</div>'
-            f'<div class="derived-value">{html.escape(value)}</div>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        if caption:
-            st.caption(caption)
-        return
-    st.metric(title, value)
-    st.caption(caption)
-
-
-def _derived_delta_line(current: float, prior: float | None, ago: float | None, unit: str, *, daily: bool = False) -> str:
-    parts: list[str] = []
+def _derived_meta(current: float, prior: float | None, ago: float | None, unit: str, when: str) -> str:
+    parts = [when] if when else []
     if prior is not None:
-        label = "vs prior day" if daily else "vs prior"
-        parts.append(f"{current - prior:+.2f} {label}")
+        parts.append(f"{_arrow_delta(current - prior, unit)} vs prior")
     if ago is not None:
-        parts.append(f"{current - ago:+.2f} vs 24h")
-    if unit and parts:
-        return " · ".join(parts) + f" {unit}"
+        parts.append(f"{_arrow_delta(current - ago, unit)} vs 24h")
     return " · ".join(parts)
 
 
-def _heat_rate_and_spread_row() -> None:
+def _gas_cards_html() -> list[str]:
     store = get_store()
     quality = QUALITY_SYNTHETIC if store.mode() == "synthetic" else "good"
-    heat = implied_heat_rate(store=store, quality=quality)
-    spread = houston_north_spread(store=store, quality=quality)
-    left, mid, right = st.columns(3)
     henry_spec = next((spec for spec in key_tags() if spec.tag == eia_price_tag()), None)
-    with left:
-        if henry_spec is not None:
-            _tile(henry_spec, show_sparkline=False)
-        else:
-            st.metric("Henry Hub", "—")
-            st.caption("source unavailable")
-    with mid:
-        if heat["ok"]:
-            history = store.series(
-                heat["houston"].tag,
-                heat["houston"].ts_utc - timedelta(hours=6),
-                heat["houston"].ts_utc - timedelta(seconds=1),
-                quality=quality,
-            )
-            prior = implied_heat_rate_at(history[-1].ts_utc, store=store, quality=quality) if history else None
-            ago = implied_heat_rate_at(heat["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
-            when = format_local(heat["houston"].ts_utc)
-            deltas = _derived_delta_line(float(heat["value"]), prior, ago, heat["unit"])
-            _derived_metric(
-                heat["label"],
-                f"{heat['value']:.2f} {heat['unit']}",
-                f"{when}" + (f" · {deltas}" if deltas else ""),
-                wrap_label=True,
-            )
-        else:
-            missing = ", ".join(heat["missing"]) or "inputs unavailable"
-            _derived_metric(heat["label"], "—", missing, wrap_label=True)
-    with right:
-        if spread["ok"]:
-            history = store.series(
-                spread["houston"].tag,
-                spread["houston"].ts_utc - timedelta(hours=6),
-                spread["houston"].ts_utc - timedelta(seconds=1),
-                quality=quality,
-            )
-            prior = houston_north_spread_at(history[-1].ts_utc, store=store, quality=quality) if history else None
-            ago = houston_north_spread_at(spread["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
-            houston_when = format_local(spread["houston"].ts_utc)
-            north_when = format_local(spread["north"].ts_utc)
-            deltas = _derived_delta_line(float(spread["value"]), prior, ago, spread["unit"])
-            if houston_when == north_when:
-                when_line = houston_when
-            else:
-                when_line = f"Houston {houston_when} · North {north_when}"
-            _derived_metric(
-                spread["label"],
-                f"{spread['value']:.2f} {spread['unit']}",
-                when_line + (f" · {deltas}" if deltas else ""),
-            )
-        else:
-            missing = ", ".join(spread["missing"]) or "inputs unavailable"
-            _derived_metric(spread["label"], "—", missing)
+    henry = _spec_card_html(henry_spec) if henry_spec is not None else _card_html(title="Henry Hub", value="—", meta="unavailable")
+    heat = implied_heat_rate(store=store, quality=quality)
+    if heat["ok"]:
+        history = store.series(
+            heat["houston"].tag,
+            heat["houston"].ts_utc - timedelta(hours=6),
+            heat["houston"].ts_utc - timedelta(seconds=1),
+            quality=quality,
+        )
+        prior = implied_heat_rate_at(history[-1].ts_utc, store=store, quality=quality) if history else None
+        ago = implied_heat_rate_at(heat["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
+        gas = _period_short(heat["henry"].ts_utc)
+        heat_card = _card_html(
+            title="Implied heat rate",
+            subtitle=f"Houston LMP ÷ Henry Hub · gas {gas}",
+            value=f"{heat['value']:.2f} {heat['unit']}",
+            meta=_derived_meta(float(heat["value"]), prior, ago, heat["unit"], _clock(heat["houston"].ts_utc)),
+        )
+    else:
+        gas = heat.get("gas_date") or "no period"
+        missing = ", ".join(heat["missing"]) or "inputs unavailable"
+        heat_card = _card_html(
+            title="Implied heat rate",
+            subtitle=f"Houston LMP ÷ Henry Hub · gas {gas}",
+            value="—",
+            meta=missing,
+        )
+    spread = houston_north_spread(store=store, quality=quality)
+    if spread["ok"]:
+        history = store.series(
+            spread["houston"].tag,
+            spread["houston"].ts_utc - timedelta(hours=6),
+            spread["houston"].ts_utc - timedelta(seconds=1),
+            quality=quality,
+        )
+        prior = houston_north_spread_at(history[-1].ts_utc, store=store, quality=quality) if history else None
+        ago = houston_north_spread_at(spread["houston"].ts_utc - timedelta(hours=24), store=store, quality=quality)
+        spread_card = _card_html(
+            title="Houston–North spread",
+            subtitle="HB_HOUSTON − HB_NORTH",
+            value=f"{spread['value']:.2f} {spread['unit']}",
+            meta=_derived_meta(float(spread["value"]), prior, ago, spread["unit"], _clock(spread["houston"].ts_utc)),
+        )
+    else:
+        missing = ", ".join(spread["missing"]) or "inputs unavailable"
+        spread_card = _card_html(
+            title="Houston–North spread",
+            subtitle="HB_HOUSTON − HB_NORTH",
+            value="—",
+            meta=missing,
+        )
+    return [henry, heat_card, spread_card]
 
 
 def _count_threshold_crossings(values: list[float], threshold: float = LMP_THRESHOLD_USD) -> int:
@@ -528,7 +568,7 @@ def _grid_pills_html() -> str:
             f'<span class="chip-asof">{html.escape(reason)}</span>'
             "</span>"
         )
-    as_of = _clock(observed) if observed is not None else ""
+    as_of = _clock(observed).replace(" CT", "") if observed is not None else ""
     prc_text = f"{float(prc):,.0f} MW" if isinstance(prc, (int, float)) else "—"
     try:
         level = int(eea) if eea is not None else None
@@ -550,7 +590,7 @@ def _grid_pills_html() -> str:
     else:
         eea_kind = "badge-red"
     eea_detail = f"EEA {level}" if level is not None else ""
-    as_of_html = f'<span class="chip-asof">as of {html.escape(as_of)}</span>' if as_of else ""
+    as_of_html = f'<span class="chip-asof">{html.escape(as_of)} CT</span>' if as_of else ""
     eea_extra = f'<span class="chip-asof">{html.escape(eea_detail)}</span>' if eea_detail else ""
     prc_pill = (
         '<span class="desk-chip desk-badge badge-green grid-pill">'
@@ -580,13 +620,18 @@ def _desk_fragment() -> None:
     if store.mode() == "synthetic":
         st.warning("SYNTHETIC — offline sample, not a measurement. Refresh live feeds to clear it.")
 
-    chips = " ".join(_feed_chip_html(row) for row in evaluate_all(store=store))
-    st.markdown(f'<div class="desk-bar">{chips} {_grid_pills_html()}</div>', unsafe_allow_html=True)
-
+    feeds = "".join(_feed_chip_html(row) for row in evaluate_all(store=store))
     fetched = store.fetched_at()
     clock = _clock(utc_now())
     pulled = _clock(fetched) if fetched else "not yet"
-    st.caption(f"{clock} · last pull {pulled}")
+    st.markdown(
+        '<div class="desk-bar">'
+        f'<div class="desk-bar-row">{feeds}</div>'
+        f'<div class="desk-bar-row desk-bar-grid">{_grid_pills_html()}'
+        f'<span class="desk-bar-clock">{html.escape(clock)} · pulled {html.escape(pulled)}</span>'
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
     grouped: dict[str, list[Any]] = {}
     for spec in key_tags():
@@ -594,24 +639,18 @@ def _desk_fragment() -> None:
 
     weather = grouped.get("open-meteo") or []
     if weather:
-        columns = st.columns(len(weather))
-        for index, spec in enumerate(weather):
-            with columns[index]:
-                _tile(spec, show_sparkline=False)
+        _card_row([_spec_card_html(spec) for spec in weather], len(weather))
 
     hubs = grouped.get("ercot") or []
     if hubs:
-        columns = st.columns(min(4, len(hubs)))
-        for index, spec in enumerate(hubs):
-            with columns[index % len(columns)]:
-                _tile(spec, show_sparkline=False)
+        _card_row([_spec_card_html(spec) for spec in hubs], min(4, len(hubs)))
 
-    left, right = st.columns([1.55, 1], gap="medium")
+    left, right = st.columns([1.55, 1], gap="small")
     with left:
-        _heat_rate_and_spread_row()
+        _card_row(_gas_cards_html(), 3)
         _lmp_threshold_chart()
     with right:
-        st.markdown("**Radar**")
+        st.markdown('<div class="radar-head">Radar</div>', unsafe_allow_html=True)
         _weather_radar_map(height=300)
     _desk_footer()
 
@@ -755,14 +794,12 @@ def _model_panel() -> None:
 
 
 def _pinned_queries_panel() -> None:
-    from spire_reactor.desk.pinned_queries import load_pins, pins_path, remove_pin
+    from spire_reactor.desk.pinned_queries import load_pins, remove_pin
 
     operator = _operator_name()
     pins = load_pins(operator=operator)
     st.subheader("Pinned queries")
-    st.caption(
-        f"Stored on this machine for operator “{operator}” · {pins_path()}"
-    )
+    st.caption(f"Stored on this machine for operator “{operator}”.")
     if not pins:
         st.caption("No pinned queries yet.")
         return
@@ -837,7 +874,7 @@ def render_cockpit() -> None:
     """Public-tag desk. Works with no model, no Temporal, and no Docker."""
     _ensure_feeds()
     st.title("Real Time Desk")
-    st.caption("Public feeds · times in CT. Public data only.")
+    st.caption("Public feeds · times in CT.")
     with st.sidebar:
         st.markdown("### Desk")
         st.checkbox("Auto refresh (60s)", value=True, key="auto_refresh")
@@ -847,10 +884,7 @@ def render_cockpit() -> None:
             st.session_state.pop("ollama_probe", None)
             st.rerun()
         render_integration_status_strip()
-        st.caption(f"Times in {desk_timezone_name()}.")
-        if st.button("Load synthetic sample", width="stretch"):
-            load_synthetic_desk()
-            st.rerun()
+        st.caption("Times in CT.")
 
     _desk_fragment()
     _model_panel()

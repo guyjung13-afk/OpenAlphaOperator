@@ -56,3 +56,7 @@ test_success.py
 htmlcov/
 .ruff_cache/
 coverage.xml
+
+# Local desk cache (public samples only, not secrets)
+logs/tag-store.json
+logs/ercot-grid.json

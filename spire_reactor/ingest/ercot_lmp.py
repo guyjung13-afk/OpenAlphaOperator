@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -165,7 +166,69 @@ def _latest_mis_docs(client: httpx.Client, limit: int) -> list[str]:
     return [doc_id for _published, doc_id in rows[:limit]]
 
 
+_MIS_CSV_NAME = re.compile(r"SPPHLZNP6905_(\d{8})_(\d{4})_csv", re.IGNORECASE)
+
+
+def _mis_name_ts(friendly: str) -> datetime | None:
+    matched = _MIS_CSV_NAME.search(friendly)
+    if not matched:
+        return None
+    day = datetime.strptime(matched.group(1), "%Y%m%d")
+    hourmin = matched.group(2)
+    hour, minute = int(hourmin[:2]), int(hourmin[2:])
+    try:
+        local = datetime(day.year, day.month, day.day, hour, minute, tzinfo=_CT)
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc)
+
+
+def backfill_ercot_around(at: datetime, *, client: httpx.Client | None = None) -> list[dict[str, Any]]:
+    """Download the public MIS interval at or just before ``at``. Used for 24h deltas."""
+    own = client is None
+    client = client or httpx.Client(timeout=httpx.Timeout(20.0, connect=5.0), follow_redirects=True)
+    try:
+        response = client.get(
+            ERCOT_DOC_LIST_URL,
+            params={"reportTypeId": ERCOT_REPORT_TYPE_ID},
+            headers=_HEADERS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        docs = (payload.get("ListDocsByRptTypeRes") or {}).get("DocumentList") or []
+        if isinstance(docs, dict):
+            docs = [docs]
+        target = at.astimezone(timezone.utc)
+        best: tuple[datetime, str] | None = None
+        for item in docs:
+            doc = item.get("Document") if isinstance(item, dict) else None
+            if not isinstance(doc, dict):
+                continue
+            friendly = str(doc.get("FriendlyName") or "")
+            moment = _mis_name_ts(friendly)
+            doc_id = str(doc.get("DocID") or "").strip()
+            if moment is None or not doc_id or moment > target:
+                continue
+            if best is None or moment > best[0]:
+                best = (moment, doc_id)
+        if best is None:
+            return []
+        response = client.get(
+            ERCOT_DOWNLOAD_URL,
+            params={"doclookupId": best[1]},
+            headers=_HEADERS,
+        )
+        response.raise_for_status()
+        return _samples_from_csv(_csv_from_download(response.content))
+    except Exception:  # noqa: BLE001 — a missed 24h point must not drop live prices
+        return []
+    finally:
+        if own:
+            client.close()
+
+
 def _samples_from_mis(client: httpx.Client) -> list[dict[str, Any]]:
+
     samples: list[dict[str, Any]] = []
     for doc_id in _latest_mis_docs(client, limit=6):
         response = client.get(

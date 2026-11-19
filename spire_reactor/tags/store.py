@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from spire_reactor.tags.schema import (
@@ -167,6 +170,7 @@ class TagStore:
     def set_mode(self, mode: str) -> None:
         with self._lock:
             self._mode = mode
+        self._persist()
 
     def fetched_at(self) -> datetime | None:
         with self._lock:
@@ -175,10 +179,12 @@ class TagStore:
     def mark_fetched(self, moment: datetime | None = None) -> None:
         with self._lock:
             self._fetched_at = moment or utc_now()
+        self._persist()
 
     def set_health(self, rows: list[dict[str, Any]]) -> None:
         with self._lock:
             self._health = list(rows)
+        self._persist()
 
     def health(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -202,6 +208,7 @@ class TagStore:
                 if len(bucket) > _MAX_POINTS:
                     for old in sorted(bucket)[: len(bucket) - _MAX_POINTS]:
                         del bucket[old]
+        self._persist()
 
     def replace_quality(self, quality: str, samples: list[TagSample]) -> None:
         with self._lock:
@@ -504,9 +511,129 @@ class TagStore:
             "message": window["note"],
         }
 
+    def _persist(self) -> None:
+        """Write public samples to the local cache. Never raises."""
+        path = tag_store_path()
+        if path is None:
+            return
+        try:
+            now = utc_now()
+            with self._lock:
+                samples: list[dict[str, Any]] = []
+                for bucket in self._points.values():
+                    for sample in bucket.values():
+                        if _should_keep(sample, now):
+                            samples.append(sample.to_dict())
+                payload = {
+                    "samples": samples,
+                    "health": list(self._health),
+                    "mode": self._mode,
+                    "fetched_at": None
+                    if self._fetched_at is None
+                    else self._fetched_at.astimezone(timezone.utc).isoformat(),
+                }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            tmp.replace(path)
+        except Exception:  # noqa: BLE001 — cache must not take the desk down
+            return
 
+
+
+
+_INSTANT_KEEP = timedelta(hours=48)
+_DAILY_KEEP = timedelta(days=120)
 _STORE = TagStore()
+_LOADED = False
+
+
+def tag_store_path() -> Path | None:
+    """Local JSON cache of public samples. Disabled under pytest."""
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return None
+    raw = (os.getenv("OPENALPHA_TAG_STORE_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(__file__).resolve().parents[2] / "logs" / "tag-store.json"
+
+
+def _parse_stored_ts(raw: str) -> datetime | None:
+    try:
+        cleaned = raw.replace("Z", "+00:00")
+        if len(cleaned) >= 5 and cleaned[-5] in "+-" and cleaned[-3] != ":":
+            cleaned = cleaned[:-2] + ":" + cleaned[-2:]
+        moment = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _should_keep(sample: TagSample, now: datetime) -> bool:
+    spec = spec_for(sample.tag)
+    cadence = spec.cadence if spec else "instant"
+    keep = _DAILY_KEEP if cadence == "daily" else _INSTANT_KEEP
+    return sample.ts_utc.astimezone(timezone.utc) >= now - keep
+
+
+def _load_persisted(store: TagStore) -> None:
+    path = tag_store_path()
+    if path is None or not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    samples: list[TagSample] = []
+    for row in payload.get("samples") or []:
+        if not isinstance(row, dict):
+            continue
+        moment = _parse_stored_ts(str(row.get("ts_utc") or ""))
+        if moment is None:
+            continue
+        try:
+            value = float(row["value"]) if row.get("value") is not None else None
+        except (TypeError, ValueError):
+            continue
+        if value is None or not row.get("tag"):
+            continue
+        samples.append(
+            TagSample(
+                tag=str(row.get("tag") or ""),
+                ts_utc=moment,
+                value=value,
+                unit=str(row.get("unit") or ""),
+                quality=str(row.get("quality") or QUALITY_GOOD),
+                source=str(row.get("source") or ""),
+            )
+        )
+    if samples:
+        with store._lock:
+            for sample in samples:
+                bucket = store._points.setdefault(sample.tag, {})
+                key = sample.ts_utc.astimezone(timezone.utc).isoformat()
+                bucket[key] = sample
+    health = payload.get("health")
+    if isinstance(health, list):
+        with store._lock:
+            store._health = [row for row in health if isinstance(row, dict)]
+    mode = str(payload.get("mode") or "").strip()
+    if mode:
+        with store._lock:
+            store._mode = mode
+    fetched = _parse_stored_ts(str(payload.get("fetched_at") or ""))
+    if fetched is not None:
+        with store._lock:
+            store._fetched_at = fetched
 
 
 def get_store() -> TagStore:
+    global _LOADED
+    if not _LOADED:
+        _LOADED = True
+        _load_persisted(_STORE)
     return _STORE
