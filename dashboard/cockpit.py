@@ -663,27 +663,91 @@ def _render_query_result(result: dict[str, Any]) -> None:
         st.caption(note)
 
 
+def _operator_name() -> str:
+    return str(st.session_state.get("desk_operator") or "").strip() or "operator"
+
+
 def _model_panel() -> None:
     status = _ollama_status()
-    if not status.get("ok"):
-        return
     st.subheader("Desk query")
-    st.caption(
-        f"Local model {ollama_model()} turns the question into tag reads. "
-        "The chart is the tag store, not the model's own numbers. "
-        "Synthetic samples are excluded."
-    )
+    if not status.get("ok"):
+        st.caption(str(status.get("message") or "Local model unavailable. Pinned panels stay on this machine."))
+    else:
+        st.caption(
+            f"Local model {ollama_model()} turns the question into tag reads. "
+            "The chart is the tag store, not the model's own numbers. "
+            "Synthetic samples are excluded."
+        )
     question = st.text_input(
         "Question",
         placeholder="ERCOT Houston hub LMP for the last 6 hours",
         key="desk_question",
     )
-    if st.button("Ask", type="primary", key="desk_ask"):
-        with st.spinner("Querying tags"):
-            st.session_state["desk_query"] = ask_desk(question)
+    pin_name = st.text_input("Pin name", placeholder="Optional title for a pinned panel", key="desk_pin_name")
+    ask_col, pin_col = st.columns([1, 1])
+    with ask_col:
+        asked = st.button("Ask", type="primary", key="desk_ask", width="stretch")
+    with pin_col:
+        pinned = st.button("Pin this query", key="desk_pin", width="stretch")
+    if asked:
+        if not status.get("ok"):
+            st.warning("Local model unavailable.")
+        else:
+            with st.spinner("Querying tags"):
+                st.session_state["desk_query"] = ask_desk(question)
+    if pinned:
+        from spire_reactor.desk.pinned_queries import add_pin
+
+        try:
+            pin = add_pin(operator=_operator_name(), name=pin_name, question=question)
+            st.session_state["desk_pin_flash"] = f"Pinned “{pin['name']}” for {_operator_name()}."
+        except ValueError as exc:
+            st.session_state["desk_pin_flash"] = str(exc)
+        st.rerun()
+    flash = st.session_state.pop("desk_pin_flash", None)
+    if flash:
+        st.caption(str(flash))
     result = st.session_state.get("desk_query")
     if isinstance(result, dict):
         _render_query_result(result)
+
+
+def _pinned_queries_panel() -> None:
+    from spire_reactor.desk.pinned_queries import load_pins, pins_path, remove_pin
+
+    operator = _operator_name()
+    pins = load_pins(operator=operator)
+    st.subheader("Pinned queries")
+    st.caption(
+        f"Stored on this machine for operator “{operator}” · {pins_path()}"
+    )
+    if not pins:
+        st.caption("No pinned queries yet.")
+        return
+    status = _ollama_status()
+    for pin in pins:
+        pin_id = str(pin["id"])
+        with st.container(border=True):
+            st.markdown(f"**{pin['name']}**")
+            st.caption(pin["question"])
+            run_col, unpin_col = st.columns([1, 1])
+            with run_col:
+                run = st.button("Run", key=f"pin_run_{pin_id}", width="stretch")
+            with unpin_col:
+                unpin = st.button("Unpin", key=f"pin_unpin_{pin_id}", width="stretch")
+            if unpin:
+                remove_pin(pin_id)
+                st.session_state.pop(f"desk_query_pin_{pin_id}", None)
+                st.rerun()
+            if run:
+                if not status.get("ok"):
+                    st.warning("Local model unavailable.")
+                else:
+                    with st.spinner("Querying tags"):
+                        st.session_state[f"desk_query_pin_{pin_id}"] = ask_desk(pin["question"])
+            result = st.session_state.get(f"desk_query_pin_{pin_id}")
+            if isinstance(result, dict):
+                _render_query_result(result)
 
 
 def _calculator() -> None:
@@ -735,6 +799,7 @@ def render_cockpit() -> None:
     with st.sidebar:
         st.markdown("### Desk")
         st.checkbox("Auto refresh (60s)", value=True, key="auto_refresh")
+        st.text_input("Operator name", value="operator", key="desk_operator")
         if st.button("Refresh live feeds", width="stretch"):
             st.session_state["force_pull"] = True
             st.session_state.pop("ollama_probe", None)
@@ -747,4 +812,5 @@ def render_cockpit() -> None:
 
     _desk_fragment()
     _model_panel()
+    _pinned_queries_panel()
     _calculator()
