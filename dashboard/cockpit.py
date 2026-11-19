@@ -127,7 +127,7 @@ def _tile(spec: Any, *, show_sparkline: bool = True) -> None:
     sample = None if state in {"unavailable", "not_connected"} else store.latest(spec.tag, quality=quality)
     if sample is None or sample.value is None:
         st.metric(_tile_label(spec), "—")
-        st.caption(spec.tag)
+        st.caption("source unavailable")
         return
     prefix = "SYNTHETIC " if sample.quality == QUALITY_SYNTHETIC else ""
     st.metric(_tile_label(spec), prefix + _format_value(float(sample.value), spec.unit))
@@ -140,7 +140,7 @@ def _tile(spec: Any, *, show_sparkline: bool = True) -> None:
         )
         st.line_chart(frame, height=72)
     when = format_period_date(sample.ts_utc) if spec.cadence == "daily" else format_local(sample.ts_utc)
-    st.caption(f"{spec.tag} · {when}")
+    st.caption(when)
 
 
 def _radar_as_of_caption(radar: dict[str, Any]) -> str:

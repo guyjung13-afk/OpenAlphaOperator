@@ -61,7 +61,7 @@ st.markdown(
 
     .block-container {
         /* Clear fixed Streamlit header so title is never clipped */
-        padding-top: 1.85rem !important;
+        padding-top: 2.6rem !important;
         padding-bottom: 1.25rem !important;
         padding-left: 1.5rem !important;
         padding-right: 1.5rem !important;
@@ -144,9 +144,9 @@ st.markdown(
     .desk-bar strong { color: #0a0a0a; font-weight: 800; }
 
     .desk-badge {
-        display: inline-block; font-size: 0.7rem; font-weight: 800; letter-spacing: 0.04em;
-        padding: 3px 8px; border-radius: 3px; text-transform: uppercase;
-        border: 1px solid transparent;
+        display: inline-block; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em;
+        padding: 3px 8px; border-radius: 3px; text-transform: none;
+        border: 1px solid transparent; white-space: nowrap;
     }
     /* !important so badge colors beat any global span rules */
     .desk-badge.badge-lake { background: #dcfce7 !important; color: #14532d !important; border-color: #86efac !important; }
@@ -160,13 +160,18 @@ st.markdown(
         background: #f3f4f6 !important; color: #374151 !important; border-color: #d1d5db !important;
         text-transform: uppercase;
     }
-    .feed-list { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.15rem 0 0.45rem 0; }
+    .feed-list { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.15rem 0 0.45rem 0; }
     .feed-row {
-        display: flex; align-items: center; gap: 8px;
-        font-size: 0.82rem; line-height: 1.3; white-space: nowrap;
+        display: flex; align-items: baseline; gap: 0.45rem;
+        font-size: 0.84rem; line-height: 1.3; white-space: nowrap;
         color: #0a0a0a;
     }
+    .feed-row .feed-label { font-weight: 700; min-width: 4.6rem; }
     .feed-row .feed-state { color: #374151; font-weight: 600; }
+    .feed-row.feed-ok .feed-dot { color: #15803d; }
+    .feed-row.feed-synth .feed-dot { color: #b45309; }
+    .feed-row.feed-muted .feed-dot { color: #9ca3af; }
+    .feed-row.feed-bad .feed-dot { color: #b91c1c; }
     .desk-bar .muted { color: #4b5563 !important; font-weight: 600; }
     .desk-bar strong { color: #0a0a0a !important; font-weight: 800; }
 
