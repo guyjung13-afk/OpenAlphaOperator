@@ -148,6 +148,12 @@ st.markdown(
         padding: 3px 8px; border-radius: 3px; text-transform: none;
         border: 1px solid transparent; white-space: nowrap;
     }
+    .desk-chip {
+        display: inline-flex; align-items: baseline; gap: 0.35rem;
+    }
+    .desk-chip .chip-asof {
+        font-weight: 600; letter-spacing: 0; opacity: 0.88;
+    }
     /* !important so badge colors beat any global span rules */
     .desk-badge.badge-lake { background: #dcfce7 !important; color: #14532d !important; border-color: #86efac !important; }
     .desk-badge.badge-ritual { background: #dbeafe !important; color: #1e3a8a !important; border-color: #93c5fd !important; }
@@ -163,11 +169,11 @@ st.markdown(
     .feed-list { display: flex; flex-direction: column; gap: 0.4rem; margin: 0.15rem 0 0.45rem 0; }
     .feed-row {
         display: flex; align-items: baseline; gap: 0.45rem;
-        font-size: 0.84rem; line-height: 1.3; white-space: nowrap;
+        font-size: 0.8rem; line-height: 1.3;
         color: #0a0a0a;
     }
-    .feed-row .feed-label { font-weight: 700; min-width: 4.6rem; }
-    .feed-row .feed-state { color: #374151; font-weight: 600; }
+    .feed-row .feed-label { font-weight: 700; min-width: 4.6rem; white-space: nowrap; }
+    .feed-row .feed-state { color: #374151; font-weight: 600; white-space: nowrap; }
     .feed-row.feed-ok .feed-dot { color: #15803d; }
     .feed-row.feed-synth .feed-dot { color: #b45309; }
     .feed-row.feed-muted .feed-dot { color: #9ca3af; }

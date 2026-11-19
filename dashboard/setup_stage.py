@@ -7,6 +7,7 @@ Falls back to env vars for Docker / headless. Never logs secrets.
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 import streamlit as st
@@ -76,45 +77,51 @@ def _status_dot(ok: bool | None, skipped: bool = False, phase2: bool = False) ->
     return "⚪"
 
 
-def _feed_chip(label: str, state: str) -> str:
-    if state == "ok":
-        klass, mark, text = "feed-ok", "●", "live"
-    elif state == "synthetic":
-        klass, mark, text = "feed-synth", "●", "synthetic"
-    elif state == "not_connected":
-        klass, mark, text = "feed-muted", "○", "not connected"
+def _feed_chip(row: dict[str, Any]) -> str:
+    freshness = str(row.get("freshness") or "unavailable")
+    if freshness == "live":
+        klass, mark = "feed-ok", "●"
+    elif freshness in {"synthetic", "amber"}:
+        klass, mark = "feed-synth", "●"
+    elif freshness == "not_connected":
+        klass, mark = "feed-muted", "○"
     else:
-        klass, mark, text = "feed-bad", "●", "unavailable"
+        klass, mark = "feed-bad", "●"
+    word = {
+        "live": "live",
+        "synthetic": "synthetic",
+        "not_connected": "not connected",
+        "unavailable": "unavailable",
+    }.get(freshness, freshness)
+    as_of = str(row.get("as_of_label") or "").strip()
+    age = str(row.get("age_label") or "").strip()
+    parts: list[str] = [word]
+    if as_of and freshness not in {"not_connected", "unavailable"}:
+        parts.append(f"as of {as_of}")
+    if age and freshness in {"live", "synthetic"}:
+        parts.append(age)
+    elif age and freshness in {"amber", "red"} and word != age:
+        parts.append(age)
+    name = html.escape(str(row.get("name") or row.get("source") or ""))
+    detail = html.escape(" · ".join(parts))
     return (
         f'<div class="feed-row {klass}">'
         f'<span class="feed-dot">{mark}</span>'
-        f'<span class="feed-label">{label}</span>'
-        f'<span class="feed-state">{text}</span></div>'
+        f'<span class="feed-label">{name}</span>'
+        f'<span class="feed-state">{detail}</span></div>'
     )
 
 
 def render_integration_status_strip() -> None:
     """Feed status for the cockpit sidebar. Uses the live tag store, not setup tests."""
+    from spire_reactor.tags.staleness import evaluate_all
     from spire_reactor.tags.store import get_store
 
     store = get_store()
     st.markdown("**Feeds**")
-    rows = (
-        ("Weather", "open-meteo"),
-        ("ERCOT", "ercot"),
-        ("EIA", "eia"),
-        ("PJM", "pjm"),
-    )
-    chips: list[str] = []
-    live: list[str] = []
-    for label, source in rows:
-        health = store.health_for(source) or {}
-        state = str(health.get("state") or "unavailable")
-        if source == "pjm" and state not in {"ok", "synthetic"}:
-            state = "not_connected"
-        chips.append(_feed_chip(label, state))
-        if state == "ok":
-            live.append(label)
+    rows = evaluate_all(store=store)
+    chips = [_feed_chip(row) for row in rows]
+    live = [str(row["name"]) for row in rows if row.get("freshness") == "live"]
     st.markdown('<div class="feed-list">' + "".join(chips) + "</div>", unsafe_allow_html=True)
     if live:
         st.caption("Live · " + ", ".join(live))
