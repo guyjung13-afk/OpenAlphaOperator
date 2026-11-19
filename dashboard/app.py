@@ -61,7 +61,7 @@ st.markdown(
 
     .block-container {
         /* Clear fixed Streamlit header so title is never clipped */
-        padding-top: 2.75rem !important;
+        padding-top: 1.85rem !important;
         padding-bottom: 1.25rem !important;
         padding-left: 1.5rem !important;
         padding-right: 1.5rem !important;
@@ -69,7 +69,7 @@ st.markdown(
         background: #ffffff !important;
     }
     /* Breathing room between major blocks without sparse waste */
-    div[data-testid="stVerticalBlock"] { gap: 0.55rem; }
+    div[data-testid="stVerticalBlock"] { gap: 0.45rem; }
     div[data-testid="stHorizontalBlock"] { gap: 0.65rem; }
 
     /* Metrics — light tiles, black type */
@@ -109,12 +109,12 @@ st.markdown(
 
     /* Page title — Real Time Desk (native st.title → h1) */
     h1, [data-testid="stMarkdownContainer"] h1 {
-        font-size: 2.5rem !important;
+        font-size: 1.85rem !important;
         font-weight: 800 !important;
         color: #0a0a0a !important;
         letter-spacing: -0.02em !important;
         line-height: 1.15 !important;
-        margin: 0.15rem 0 0.65rem 0 !important;
+        margin: 0.1rem 0 0.25rem 0 !important;
         padding: 0 !important;
     }
     /* Section titles (st.subheader / ###) */
@@ -122,7 +122,7 @@ st.markdown(
     [data-testid="stMarkdownContainer"] h2,
     [data-testid="stMarkdownContainer"] h3 {
         font-size: 1.05rem !important;
-        margin: 0.65rem 0 0.4rem 0 !important;
+        margin: 0.85rem 0 0.35rem 0 !important;
         color: #0a0a0a !important;
         font-weight: 800 !important;
     }
@@ -137,7 +137,7 @@ st.markdown(
     .desk-bar {
         display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
         background: #f8fafc; border: 1px solid #d1d5db; border-radius: 4px;
-        padding: 10px 14px; margin: 0.25rem 0 0.65rem 0;
+        padding: 8px 12px; margin: 0.15rem 0 0.45rem 0;
         font-size: 0.88rem; color: #0a0a0a;
     }
     .desk-bar .muted { color: #4b5563; font-weight: 600; }
@@ -156,6 +156,17 @@ st.markdown(
     .desk-badge.badge-amber { background: #fef3c7 !important; color: #78350f !important; border-color: #fcd34d !important; }
     .desk-badge.badge-red,
     .desk-badge.badge-stale { background: #fee2e2 !important; color: #7f1d1d !important; border-color: #fca5a5 !important; }
+    .desk-badge.badge-muted {
+        background: #f3f4f6 !important; color: #374151 !important; border-color: #d1d5db !important;
+        text-transform: uppercase;
+    }
+    .feed-list { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.15rem 0 0.45rem 0; }
+    .feed-row {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 0.82rem; line-height: 1.3; white-space: nowrap;
+        color: #0a0a0a;
+    }
+    .feed-row .feed-state { color: #374151; font-weight: 600; }
     .desk-bar .muted { color: #4b5563 !important; font-weight: 600; }
     .desk-bar strong { color: #0a0a0a !important; font-weight: 800; }
 

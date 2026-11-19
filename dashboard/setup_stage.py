@@ -76,27 +76,54 @@ def _status_dot(ok: bool | None, skipped: bool = False, phase2: bool = False) ->
     return "⚪"
 
 
+def _feed_chip(label: str, state: str) -> str:
+    if state == "ok":
+        kind, text = "badge-green", "live"
+    elif state == "synthetic":
+        kind, text = "badge-amber", "synthetic"
+    elif state == "not_connected":
+        kind, text = "badge-muted", "not connected"
+    else:
+        kind, text = "badge-red", "unavailable"
+    return (
+        f'<div class="feed-row"><span class="desk-badge {kind}">{label}</span>'
+        f'<span class="feed-state">{text}</span></div>'
+    )
+
+
 def render_integration_status_strip() -> None:
-    """Compact status chips for cockpit sidebar."""
-    creds = load_credentials()
-    results = st.session_state.get("test_results") or {}
-    st.markdown("**Integrations**")
-    cols = st.columns(4)
-    live = live_integrations()
-    for i, integ in enumerate(live):
-        iid = integ["id"]
-        r = results.get(iid)
-        ok = r.get("ok") if r else None
-        skipped = bool(r and r.get("skipped"))
-        with cols[i % 4]:
-            st.caption(f"{_status_dot(ok, skipped=skipped)} {integ['label'].split('(')[0].strip()}")
-    if st.button("⚙ Open Setup", key="open_setup_from_strip", width="stretch"):
+    """Feed status for the cockpit sidebar. Uses the live tag store, not setup tests."""
+    from spire_reactor.tags.store import get_store
+
+    store = get_store()
+    st.markdown("**Feeds**")
+    rows = (
+        ("Weather", "open-meteo"),
+        ("ERCOT", "ercot"),
+        ("EIA", "eia"),
+        ("PJM", "pjm"),
+    )
+    chips: list[str] = []
+    live: list[str] = []
+    for label, source in rows:
+        health = store.health_for(source) or {}
+        state = str(health.get("state") or "unavailable")
+        if source == "pjm" and state not in {"ok", "synthetic"}:
+            state = "not_connected"
+        chips.append(_feed_chip(label, state))
+        if state == "ok":
+            live.append(label)
+    st.markdown('<div class="feed-list">' + "".join(chips) + "</div>", unsafe_allow_html=True)
+    if live:
+        st.caption("Live · " + ", ".join(live))
+    elif store.mode() == "synthetic":
+        st.caption("Synthetic sample — not a measurement")
+    else:
+        st.caption("Waiting for the first live pull")
+    if st.button("Open Setup", key="open_setup_from_strip", width="stretch"):
         st.session_state.show_setup = True
         st.session_state.force_setup = True
         st.rerun()
-    mode = "Demo" if is_demo_mode(creds) else "Live"
-    done = "configured" if is_setup_complete(creds) else "not saved"
-    st.caption(f"Mode: **{mode}** · Setup: {done}")
 
 
 def render_setup_stage() -> None:

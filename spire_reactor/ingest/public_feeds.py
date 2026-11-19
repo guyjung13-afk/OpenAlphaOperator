@@ -65,6 +65,8 @@ EIA_API_KEY = os.getenv("EIA_API_KEY", "").strip()  # legacy module default; pre
 EIA_BASE = "https://api.eia.gov/v2"
 # Henry Hub daily spot (RNGWHHD) on the public natural-gas price route.
 EIA_SERIES_ROUTE = os.getenv("EIA_SERIES_ROUTE", "natural-gas/pri/sum/data").strip("/")
+# Calendar-day window for the Henry Hub history chart. length is a safety cap.
+EIA_HISTORY_DAYS = int(os.getenv("EIA_HISTORY_DAYS", "90"))
 HTTP_TIMEOUT = float(os.getenv("INGEST_HTTP_TIMEOUT", "12"))
 RAINVIEWER_MAPS_URL = os.getenv(
     "RAINVIEWER_MAPS_URL",
@@ -361,6 +363,7 @@ def fetch_eia_natural_gas_price(
     """
     EIA daily series (default RNGWHHD, Henry Hub spot).
 
+    Pulls about EIA_HISTORY_DAYS (default 90) of daily points.
     No key, an error, or an empty body yields a null price. No stand-in number.
     """
     key = _resolve_eia_api_key(api_key if api_key is not None else None)
@@ -369,14 +372,17 @@ def fetch_eia_natural_gas_price(
         return _eia_unavailable("EIA_API_KEY not set", skipped=True)
 
     url = f"{EIA_BASE}/{EIA_SERIES_ROUTE}"
+    days = max(EIA_HISTORY_DAYS, 1)
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     params = {
         "api_key": key,
         "frequency": "daily",
         "data[0]": "value",
         "facets[series][]": series_id,
+        "start": start,
         "sort[0][column]": "period",
         "sort[0][direction]": "desc",
-        "length": 30,
+        "length": days + 30,
     }
     own = client is None
     client = client or httpx.Client(timeout=_http_timeout(), follow_redirects=True)
@@ -407,7 +413,8 @@ def fetch_eia_natural_gas_price(
             history.append({"period": str(period), "value": number})
         if not history:
             return _eia_unavailable("empty EIA response")
-        latest = history[0]
+        history.sort(key=lambda row: str(row["period"]))
+        latest = history[-1]
         return {
             "source": "eia",
             "ok": True,
@@ -417,7 +424,7 @@ def fetch_eia_natural_gas_price(
             "period": latest["period"],
             "observed_at": latest["period"],
             "history": history,
-            "message": f"EIA {series_id} · {latest['period']}",
+            "message": f"EIA {series_id} · {latest['period']} · {len(history)} daily points",
         }
     except Exception as exc:  # noqa: BLE001
         return _eia_unavailable(_redact(str(exc), key))
