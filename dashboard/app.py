@@ -151,6 +151,30 @@ st.markdown(
         border-top: 1px solid #e5e7eb;
     }
     .grid-pill { margin-left: 0.15rem; }
+    .derived-card {
+        background: #ffffff;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        padding: 8px 10px 6px 10px;
+        min-height: 100%;
+    }
+    .derived-label {
+        font-size: 0.78rem;
+        font-weight: 650;
+        line-height: 1.3;
+        color: #0a0a0a;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+        margin-bottom: 0.2rem;
+    }
+    .derived-value {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #0a0a0a;
+        line-height: 1.25;
+        white-space: normal;
+    }
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3 {
