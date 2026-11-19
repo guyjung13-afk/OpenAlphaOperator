@@ -78,15 +78,17 @@ def _status_dot(ok: bool | None, skipped: bool = False, phase2: bool = False) ->
 
 def _feed_chip(label: str, state: str) -> str:
     if state == "ok":
-        kind, text = "badge-green", "live"
+        klass, mark, text = "feed-ok", "●", "live"
     elif state == "synthetic":
-        kind, text = "badge-amber", "synthetic"
+        klass, mark, text = "feed-synth", "●", "synthetic"
     elif state == "not_connected":
-        kind, text = "badge-muted", "not connected"
+        klass, mark, text = "feed-muted", "○", "not connected"
     else:
-        kind, text = "badge-red", "unavailable"
+        klass, mark, text = "feed-bad", "●", "unavailable"
     return (
-        f'<div class="feed-row"><span class="desk-badge {kind}">{label}</span>'
+        f'<div class="feed-row {klass}">'
+        f'<span class="feed-dot">{mark}</span>'
+        f'<span class="feed-label">{label}</span>'
         f'<span class="feed-state">{text}</span></div>'
     )
 
