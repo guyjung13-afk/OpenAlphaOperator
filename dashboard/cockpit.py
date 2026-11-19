@@ -23,6 +23,7 @@ from spire_reactor.ingest.desk_pull import (
 )
 from spire_reactor.ingest.public_feeds import DEFAULT_LAT, DEFAULT_LON, fetch_radar_overlay
 from spire_reactor.model.ollama_desk import ask_desk, ollama_model, probe_ollama
+from spire_reactor.tags.derived import houston_north_spread, implied_heat_rate
 from spire_reactor.tags.schema import (
     QUALITY_SYNTHETIC,
     desk_timezone,
@@ -270,6 +271,41 @@ def _eia_history_chart(spec: Any) -> None:
     st.caption(f"{spec.tag} · daily · {first} to {last} · {len(points)} points")
 
 
+
+def _derived_metric(title: str, value: str, caption: str) -> None:
+    st.metric(title, value)
+    st.caption(caption)
+
+
+def _heat_rate_and_spread_row() -> None:
+    store = get_store()
+    heat = implied_heat_rate(store=store)
+    spread = houston_north_spread(store=store)
+    left, right = st.columns(2)
+    with left:
+        if heat["ok"]:
+            _derived_metric(
+                heat["label"],
+                f"{heat['value']:.2f} {heat['unit']}",
+                f"Houston LMP as of {format_local(heat['houston'].ts_utc)}",
+            )
+        else:
+            missing = ", ".join(heat["missing"]) or "inputs unavailable"
+            _derived_metric(heat["label"], "—", missing)
+    with right:
+        if spread["ok"]:
+            houston_when = format_local(spread["houston"].ts_utc)
+            north_when = format_local(spread["north"].ts_utc)
+            _derived_metric(
+                spread["label"],
+                f"{spread['value']:.2f} {spread['unit']}",
+                f"HB_HOUSTON as of {houston_when} · HB_NORTH as of {north_when}",
+            )
+        else:
+            missing = ", ".join(spread["missing"]) or "inputs unavailable"
+            _derived_metric(spread["label"], "—", missing)
+
+
 @st.fragment(run_every=timedelta(seconds=60))
 def _desk_fragment() -> None:
     _ensure_feeds()
@@ -311,6 +347,8 @@ def _desk_fragment() -> None:
         for index, spec in enumerate(specs):
             with columns[index % len(columns)]:
                 _tile(spec)
+        if source == "ercot":
+            _heat_rate_and_spread_row()
 
     with st.expander("All public tags", expanded=False):
         rows = summarize().get("latest") or []
