@@ -3,6 +3,8 @@ Public feed adapters for OpenAlphaOperator demos.
 
 Sources:
   - Open-Meteo (no API key) — weather tags. Falls back to other public Open-Meteo hosts.
+  - RainViewer (no API key) — live precipitation radar tiles for the desk map, with
+    Iowa Environmental Mesonet NEXRAD tiles as fallback. No stand-in imagery.
   - EIA Open Data (optional key) — series RNGWHHD when configured. No stand-in price.
   - Derived burn payload for the local ritual only (not a measured tag).
   - synthetic_tick — offline ritual sample, labeled synthetic.
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -63,6 +66,18 @@ EIA_BASE = "https://api.eia.gov/v2"
 # Henry Hub daily spot (RNGWHHD) on the public natural-gas price route.
 EIA_SERIES_ROUTE = os.getenv("EIA_SERIES_ROUTE", "natural-gas/pri/sum/data").strip("/")
 HTTP_TIMEOUT = float(os.getenv("INGEST_HTTP_TIMEOUT", "12"))
+RAINVIEWER_MAPS_URL = os.getenv(
+    "RAINVIEWER_MAPS_URL",
+    "https://api.rainviewer.com/public/weather-maps.json",
+)
+# Universal Blue palette, smoothing on, snow on. Placeholders are for the map tile client.
+_RAINVIEWER_TILE_SUFFIX = "/256/{z}/{x}/{y}/2/1_1.png"
+IEM_NEXRAD_TILE_URL = os.getenv(
+    "IEM_NEXRAD_TILE_URL",
+    "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png",
+)
+_RADAR_CACHE_TTL = float(os.getenv("RADAR_CACHE_SECONDS", "300"))
+_radar_cache: dict[str, Any] = {"expires_at": 0.0, "result": None}
 
 
 def _http_timeout() -> httpx.Timeout:
@@ -215,6 +230,114 @@ def fetch_open_meteo(
     finally:
         if own:
             client.close()
+
+
+def _radar_unavailable(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source": "radar",
+        "state": "unavailable",
+        "tile_url": None,
+        "time_unix": None,
+        "observed_at": None,
+        "error": message,
+    }
+
+
+def _radar_from_rainviewer(data: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Pick the latest past RainViewer frame. Returns None if the payload is unusable."""
+    host = str(data.get("host") or "https://tilecache.rainviewer.com").rstrip("/")
+    past = (data.get("radar") or {}).get("past") or []
+    if not past:
+        return None
+    frame = past[-1]
+    path = str(frame.get("path") or "").strip()
+    if path and not path.startswith("/"):
+        path = "/" + path
+    try:
+        unix = int(frame.get("time"))
+    except (TypeError, ValueError):
+        unix = None
+    if not path or unix is None:
+        return None
+    observed = datetime.fromtimestamp(unix, timezone.utc)
+    return {
+        "ok": True,
+        "source": "rainviewer",
+        "state": "ok",
+        "tile_url": f"{host}{path}{_RAINVIEWER_TILE_SUFFIX}",
+        "time_unix": unix,
+        "observed_at": observed.isoformat(),
+        "message": "RainViewer past frame",
+    }
+
+
+def _iem_nexrad_overlay(client: httpx.Client) -> dict[str, Any]:
+    """Public IEM NEXRAD composite tiles. Used only if RainViewer is unreachable."""
+    template = IEM_NEXRAD_TILE_URL
+    # Probe one Gulf / Texas tile so a dead host fails closed.
+    probe = template.replace("{z}", "5").replace("{x}", "7").replace("{y}", "13")
+    try:
+        headers = {**_HTTP_HEADERS, "Accept": "image/png,image/*,*/*"}
+        resp = client.get(probe, headers=headers)
+        resp.raise_for_status()
+        if not resp.content:
+            return _radar_unavailable("IEM NEXRAD returned an empty tile")
+    except Exception as exc:  # noqa: BLE001 — radar is optional on the desk
+        return _radar_unavailable(f"IEM NEXRAD: {exc}")
+    return {
+        "ok": True,
+        "source": "iem-nexrad",
+        "state": "ok",
+        "tile_url": template,
+        "time_unix": None,
+        "observed_at": None,
+        "message": "Iowa Environmental Mesonet NEXRAD composite",
+    }
+
+
+def fetch_radar_overlay(client: Optional[httpx.Client] = None) -> dict[str, Any]:
+    """
+    Latest public precipitation radar tiles (no API key).
+
+    Prefers RainViewer's latest past frame and falls back to IEM NEXRAD
+    tiles. Never raises. The frame list is cached for about five minutes.
+    """
+    now = time.time()
+    cached = _radar_cache.get("result")
+    if cached is not None and now < float(_radar_cache.get("expires_at") or 0):
+        return dict(cached)
+
+    own = client is None
+    client = client or httpx.Client(timeout=_http_timeout(), follow_redirects=True)
+    errors: list[str] = []
+    try:
+        try:
+            resp = client.get(RAINVIEWER_MAPS_URL, headers=_HTTP_HEADERS)
+            resp.raise_for_status()
+            parsed = _radar_from_rainviewer(resp.json())
+            if parsed is not None:
+                result = parsed
+            else:
+                errors.append("RainViewer: no past radar frame")
+                result = _iem_nexrad_overlay(client)
+                if not result.get("ok"):
+                    errors.append(str(result.get("error") or "IEM NEXRAD failed"))
+                    result = _radar_unavailable("; ".join(errors))
+        except Exception as exc:  # noqa: BLE001 — try the IEM fallback
+            errors.append(f"{RAINVIEWER_MAPS_URL}: {exc}")
+            result = _iem_nexrad_overlay(client)
+            if not result.get("ok"):
+                errors.append(str(result.get("error") or "IEM NEXRAD failed"))
+                result = _radar_unavailable("; ".join(errors))
+    finally:
+        if own:
+            client.close()
+
+    ttl = _RADAR_CACHE_TTL if result.get("ok") else min(60.0, _RADAR_CACHE_TTL)
+    _radar_cache["result"] = result
+    _radar_cache["expires_at"] = now + ttl
+    return dict(result)
 
 
 def _eia_unavailable(message: str, *, skipped: bool = False) -> dict[str, Any]:

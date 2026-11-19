@@ -9,26 +9,30 @@ from __future__ import annotations
 
 import html
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from spire_reactor.ingest.desk_pull import (
     collect_public_desk,
     load_synthetic_desk,
     summarize,
 )
+from spire_reactor.ingest.public_feeds import DEFAULT_LAT, DEFAULT_LON, fetch_radar_overlay
 from spire_reactor.model.ollama_desk import ask_desk, ollama_model, probe_ollama
 from spire_reactor.tags.schema import (
     QUALITY_SYNTHETIC,
+    desk_timezone,
     desk_timezone_name,
     format_local,
     format_period_date,
     format_utc,
     key_tags,
     utc_now,
+    weather_site,
 )
 from spire_reactor.tags.store import get_store
 
@@ -106,6 +110,68 @@ def _tile(spec: Any) -> None:
     st.caption(when)
 
 
+def _radar_as_of_caption(radar: dict[str, Any]) -> str:
+    raw = radar.get("observed_at")
+    moment = None
+    if raw:
+        try:
+            moment = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            moment = None
+    if moment is not None:
+        local = moment.astimezone(desk_timezone())
+        return f"radar as of {local.strftime('%H:%M')}"
+    if radar.get("source") == "iem-nexrad":
+        return "radar as of latest IEM NEXRAD"
+    return "radar as of unknown time"
+
+
+def _weather_radar_map() -> None:
+    """Houston/ERCOT weather map with a live public radar overlay. Hidden on fetch failure."""
+    show = st.checkbox("Radar overlay", value=True, key="wx_radar_overlay")
+    radar: dict[str, Any] = fetch_radar_overlay() if show else {}
+    layers: list[dict[str, Any]] = []
+    if show and radar.get("ok") and radar.get("tile_url"):
+        layers.append(
+            {
+                "sourcetype": "raster",
+                "source": [str(radar["tile_url"])],
+                "below": "traces",
+                "opacity": 0.65,
+            }
+        )
+    site = weather_site()
+    fig = go.Figure(
+        go.Scattermapbox(
+            lat=[DEFAULT_LAT],
+            lon=[DEFAULT_LON],
+            mode="markers",
+            marker={"size": 11, "color": "#0a0a0a"},
+            text=[site],
+            hoverinfo="text",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        mapbox={
+            "style": "open-street-map",
+            "center": {"lat": DEFAULT_LAT, "lon": DEFAULT_LON},
+            "zoom": 6,
+            "layers": layers,
+        },
+        margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        height=420,
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    if not show:
+        return
+    if radar.get("ok") and layers:
+        st.caption(_radar_as_of_caption(radar))
+    else:
+        st.caption(f"Radar unavailable: {radar.get('error') or 'source unavailable'}")
+
+
 @st.fragment(run_every=timedelta(seconds=60))
 def _desk_fragment() -> None:
     _ensure_feeds()
@@ -140,6 +206,8 @@ def _desk_fragment() -> None:
         for index, spec in enumerate(specs):
             with columns[index % len(columns)]:
                 _tile(spec)
+        if source == "open-meteo":
+            _weather_radar_map()
 
     with st.expander("All public tags", expanded=False):
         rows = summarize().get("latest") or []

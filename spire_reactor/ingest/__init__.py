@@ -5,11 +5,13 @@ from spire_reactor.ingest.public_feeds import (
     fetch_demo_snapshot,
     fetch_eia_natural_gas_price,
     fetch_open_meteo,
+    fetch_radar_overlay,
 )
 
 __all__ = [
     "build_operator_payload",
     "fetch_demo_snapshot",
     "fetch_open_meteo",
+    "fetch_radar_overlay",
     "fetch_eia_natural_gas_price",
 ]
