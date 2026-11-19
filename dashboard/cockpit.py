@@ -33,6 +33,7 @@ from spire_reactor.tags.schema import (
     utc_now,
     weather_site,
 )
+from spire_reactor.tags.staleness import evaluate_all
 from spire_reactor.tags.store import get_store
 
 from dashboard.setup_stage import render_integration_status_strip
@@ -80,19 +81,48 @@ def _format_value(value: float, unit: str) -> str:
     return f"{text} {_shown_unit(unit)}"
 
 
-def _badge(source: str, state: str) -> str:
-    kind = {
-        "ok": "badge-green",
+def _freshness_kind(freshness: str) -> str:
+    return {
+        "live": "badge-green",
+        "amber": "badge-amber",
+        "red": "badge-red",
         "synthetic": "badge-amber",
         "not_connected": "badge-muted",
-    }.get(state, "badge-red")
-    label = {
-        "ok": "live",
-        "synthetic": "synthetic",
-        "not_connected": "not connected",
-    }.get(state, "unavailable")
+    }.get(freshness, "badge-red")
+
+
+def _freshness_word(row: dict[str, Any]) -> str:
+    freshness = str(row.get("freshness") or "unavailable")
+    if freshness == "live":
+        return "live"
+    if freshness == "synthetic":
+        return "synthetic"
+    if freshness == "not_connected":
+        return "not connected"
+    if freshness in {"amber", "red"} and row.get("age_label"):
+        return str(row["age_label"])
+    return "unavailable"
+
+
+def _feed_chip_html(row: dict[str, Any]) -> str:
+    name = html.escape(str(row.get("name") or row.get("source") or ""))
+    word = html.escape(_freshness_word(row))
+    kind = _freshness_kind(str(row.get("freshness") or "unavailable"))
+    as_of = str(row.get("as_of_label") or "").strip()
+    age = str(row.get("age_label") or "").strip()
+    detail = ""
+    if as_of and row.get("freshness") not in {"not_connected", "unavailable"}:
+        # Age is already the status word when stale; still show it next to as-of when live.
+        if row.get("freshness") == "live" and age:
+            detail = f'<span class="chip-asof">as of {html.escape(as_of)} · {html.escape(age)}</span>'
+        else:
+            detail = f'<span class="chip-asof">as of {html.escape(as_of)}</span>'
     return (
-        f'<span class="desk-badge {kind}">{html.escape(source)} {label}</span>'
+        f'<span class="desk-chip desk-badge {kind}">'
+        f'<span class="chip-name">{name}</span> '
+        f'<span class="chip-state">{word}</span>'
+        f"{detail}"
+        "</span>"
     )
 
 
@@ -240,18 +270,6 @@ def _eia_history_chart(spec: Any) -> None:
     st.caption(f"{spec.tag} · daily · {first} to {last} · {len(points)} points")
 
 
-def _health_badge_state(row: dict[str, Any]) -> str:
-    source = str(row.get("source") or "")
-    state = str(row.get("state") or "unavailable")
-    if source == "pjm" and state not in {"ok", "synthetic"}:
-        return "not_connected"
-    return state
-
-
-def _badge_label(source: str) -> str:
-    return {"open-meteo": "Weather", "eia": "EIA", "ercot": "ERCOT", "pjm": "PJM"}.get(source, source)
-
-
 @st.fragment(run_every=timedelta(seconds=60))
 def _desk_fragment() -> None:
     _ensure_feeds()
@@ -259,13 +277,8 @@ def _desk_fragment() -> None:
     if store.mode() == "synthetic":
         st.warning("SYNTHETIC — offline sample, not a measurement. Refresh live feeds to clear it.")
 
-    health = store.health()
-    if health:
-        chips = " ".join(
-            _badge(_badge_label(str(row.get("source") or "")), _health_badge_state(row))
-            for row in health
-        )
-        st.markdown(f'<div class="desk-bar">{chips}</div>', unsafe_allow_html=True)
+    chips = " ".join(_feed_chip_html(row) for row in evaluate_all(store=store))
+    st.markdown(f'<div class="desk-bar">{chips}</div>', unsafe_allow_html=True)
 
     fetched = store.fetched_at()
     clock = _clock(utc_now())
