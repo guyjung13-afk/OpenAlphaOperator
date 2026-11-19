@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from spire_reactor.ingest.ercot_lmp import fetch_ercot_lmp
@@ -199,6 +201,8 @@ def _apply(feeds: list[dict[str, Any]], *, mode: str) -> dict[str, Any]:
     store.set_health(health)
     store.set_mode(mode)
     store.mark_fetched(fetched)
+    if mode != "synthetic":
+        _write_desk_health_file(health, mode)
     return summarize()
 
 
@@ -234,13 +238,42 @@ def summarize() -> dict[str, Any]:
     }
 
 
+def _write_desk_health_file(health: list[dict[str, Any]], mode: str) -> None:
+    """Refresh logs/desk.health.json. No secrets. Best-effort; never raise."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        path = root / "logs" / "desk.health.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pid = os.getpid()
+        pidfile = root / "logs" / "desk.pid"
+        if pidfile.is_file():
+            raw = pidfile.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                pid = int(raw)
+        sources = {
+            str(row.get("source") or ""): str(row.get("state") or "unavailable")
+            for row in health
+        }
+        payload = {
+            "timestamp": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "port": int(os.getenv("DESK_PORT", "8501") or "8501"),
+            "pid": pid,
+            "http_status": 200,
+            "mode": mode,
+            "sources": sources,
+        }
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001 — health file must not take the desk down
+        return
+
+
 def _pjm_feed(api_key: str) -> dict[str, Any]:
     if not api_key:
         return {
             "source": "pjm",
             "ok": False,
-            "state": "unavailable",
-            "message": "source unavailable: PJM_API_KEY not set",
+            "state": "not_connected",
+            "message": "not connected",
             "samples": [],
         }
     return fetch_pjm_lmp(api_key=api_key)

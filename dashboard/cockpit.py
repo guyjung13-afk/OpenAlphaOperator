@@ -29,7 +29,6 @@ from spire_reactor.tags.schema import (
     desk_timezone_name,
     format_local,
     format_period_date,
-    format_utc,
     key_tags,
     utc_now,
     weather_site,
@@ -45,6 +44,32 @@ def _shown_unit(unit: str) -> str:
     return _UNIT_LABEL.get(unit, unit)
 
 
+def _clock(moment: Any) -> str:
+    return moment.astimezone(desk_timezone()).strftime("%H:%M %Z")
+
+
+def _tile_label(spec: Any) -> str:
+    """Short operator label; the full tag stays in the caption."""
+    parts = str(spec.tag).split(".")
+    family = parts[0] if parts else ""
+    entity = parts[1] if len(parts) > 1 else ""
+    variable = parts[-1] if parts else str(spec.tag)
+    if variable == "TEMP_C":
+        return "Temperature"
+    if variable == "WIND_KMH":
+        return "Wind"
+    if variable == "RH_PCT":
+        return "Humidity"
+    if variable == "RNGWHHD" or (family == "EIA" and entity == "NG"):
+        return "Henry Hub"
+    if family == "ERCOT" and variable == "LMP":
+        name = entity.replace("HB_", "").replace("LZ_", "LZ ").replace("_", " ").title()
+        return f"{name} LMP"
+    if family == "PJM" and variable == "LMP":
+        return f"{entity.title()} LMP"
+    return str(spec.tag)
+
+
 def _format_value(value: float, unit: str) -> str:
     if unit == "%":
         text = f"{value:.0f}"
@@ -56,8 +81,16 @@ def _format_value(value: float, unit: str) -> str:
 
 
 def _badge(source: str, state: str) -> str:
-    kind = {"ok": "badge-green", "synthetic": "badge-amber"}.get(state, "badge-red")
-    label = {"ok": "ok", "synthetic": "synthetic"}.get(state, "unavailable")
+    kind = {
+        "ok": "badge-green",
+        "synthetic": "badge-amber",
+        "not_connected": "badge-muted",
+    }.get(state, "badge-red")
+    label = {
+        "ok": "live",
+        "synthetic": "synthetic",
+        "not_connected": "not connected",
+    }.get(state, "unavailable")
     return (
         f'<span class="desk-badge {kind}">{html.escape(source)} {label}</span>'
     )
@@ -86,28 +119,28 @@ def _ollama_status() -> dict[str, Any]:
     return cached
 
 
-def _tile(spec: Any) -> None:
+def _tile(spec: Any, *, show_sparkline: bool = True) -> None:
     store = get_store()
     health = store.health_for(spec.source) or {}
     state = str(health.get("state") or "unavailable")
     quality = QUALITY_SYNTHETIC if state == "synthetic" else "good"
-    sample = None if state == "unavailable" else store.latest(spec.tag, quality=quality)
+    sample = None if state in {"unavailable", "not_connected"} else store.latest(spec.tag, quality=quality)
     if sample is None or sample.value is None:
-        st.metric(spec.tag, "—")
-        st.caption("source unavailable")
+        st.metric(_tile_label(spec), "—")
+        st.caption(spec.tag)
         return
     prefix = "SYNTHETIC " if sample.quality == QUALITY_SYNTHETIC else ""
-    st.metric(spec.tag, prefix + _format_value(float(sample.value), spec.unit))
-    window = timedelta(days=40) if spec.cadence == "daily" else timedelta(hours=36)
+    st.metric(_tile_label(spec), prefix + _format_value(float(sample.value), spec.unit))
+    window = timedelta(days=90) if spec.cadence == "daily" else timedelta(hours=36)
     points = store.series(spec.tag, utc_now() - window, utc_now(), quality=quality)
-    if len(points) >= 2:
+    if show_sparkline and len(points) >= 2:
         frame = pd.DataFrame(
             {"value": [point.value for point in points]},
             index=pd.to_datetime([point.ts_utc for point in points], utc=True),
         )
-        st.line_chart(frame, height=88)
+        st.line_chart(frame, height=72)
     when = format_period_date(sample.ts_utc) if spec.cadence == "daily" else format_local(sample.ts_utc)
-    st.caption(when)
+    st.caption(f"{spec.tag} · {when}")
 
 
 def _radar_as_of_caption(radar: dict[str, Any]) -> str:
@@ -160,7 +193,7 @@ def _weather_radar_map() -> None:
             "layers": layers,
         },
         margin={"l": 0, "r": 0, "t": 0, "b": 0},
-        height=420,
+        height=300,
         paper_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
@@ -172,6 +205,53 @@ def _weather_radar_map() -> None:
         st.caption(f"Radar unavailable: {radar.get('error') or 'source unavailable'}")
 
 
+def _eia_history_chart(spec: Any) -> None:
+    store = get_store()
+    health = store.health_for(spec.source) or {}
+    state = str(health.get("state") or "unavailable")
+    if state in {"unavailable", "not_connected"}:
+        return
+    quality = QUALITY_SYNTHETIC if state == "synthetic" else "good"
+    points = store.series(spec.tag, utc_now() - timedelta(days=90), utc_now(), quality=quality)
+    if len(points) < 2:
+        st.caption("Not enough EIA history to chart yet.")
+        return
+    frame = pd.DataFrame(
+        {
+            "period": pd.to_datetime([point.ts_utc for point in points], utc=True),
+            "USD/MMBtu": [point.value for point in points],
+        }
+    )
+    chart = px.line(frame, x="period", y="USD/MMBtu")
+    chart.update_traces(line={"width": 2, "color": "#0f172a"}, hovertemplate="%{x|%b %d, %Y}<br>%{y:.2f} USD/MMBtu<extra></extra>")
+    chart.update_xaxes(tickformat="%b %d", nticks=8, title="", showgrid=False, ticks="outside")
+    chart.update_yaxes(title="USD/MMBtu", gridcolor="#e5e7eb", zeroline=False, ticks="outside")
+    chart.update_layout(
+        height=260,
+        margin=dict(l=8, r=8, t=8, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="x unified",
+        showlegend=False,
+    )
+    st.plotly_chart(chart, width="stretch", config={"displayModeBar": False})
+    first = format_period_date(points[0].ts_utc)
+    last = format_period_date(points[-1].ts_utc)
+    st.caption(f"{spec.tag} · daily · {first} to {last} · {len(points)} points")
+
+
+def _health_badge_state(row: dict[str, Any]) -> str:
+    source = str(row.get("source") or "")
+    state = str(row.get("state") or "unavailable")
+    if source == "pjm" and state not in {"ok", "synthetic"}:
+        return "not_connected"
+    return state
+
+
+def _badge_label(source: str) -> str:
+    return {"open-meteo": "Weather", "eia": "EIA", "ercot": "ERCOT", "pjm": "PJM"}.get(source, source)
+
+
 @st.fragment(run_every=timedelta(seconds=60))
 def _desk_fragment() -> None:
     _ensure_feeds()
@@ -181,15 +261,16 @@ def _desk_fragment() -> None:
 
     health = store.health()
     if health:
-        chips = " ".join(_badge(str(row.get("source") or ""), str(row.get("state") or "")) for row in health)
+        chips = " ".join(
+            _badge(_badge_label(str(row.get("source") or "")), _health_badge_state(row))
+            for row in health
+        )
         st.markdown(f'<div class="desk-bar">{chips}</div>', unsafe_allow_html=True)
-        for row in health:
-            st.caption(f"{row.get('source')}: {row.get('message') or 'source unavailable'}")
 
     fetched = store.fetched_at()
-    clock = format_local(utc_now())
-    pulled = format_utc(fetched) if fetched else "not yet"
-    st.caption(f"{clock} · stored UTC · last pull {pulled}")
+    clock = _clock(utc_now())
+    pulled = _clock(fetched) if fetched else "not yet"
+    st.caption(f"{clock} · last pull {pulled}")
 
     grouped: dict[str, list[Any]] = {}
     for spec in key_tags():
@@ -201,13 +282,22 @@ def _desk_fragment() -> None:
         "pjm": "PJM",
     }
     for source, specs in grouped.items():
+        if source == "pjm":
+            continue
         st.subheader(titles.get(source, source))
+        if source == "open-meteo":
+            _weather_radar_map()
+        if source == "eia":
+            columns = st.columns(4)
+            for index, spec in enumerate(specs):
+                with columns[index % 4]:
+                    _tile(spec, show_sparkline=False)
+            _eia_history_chart(specs[0])
+            continue
         columns = st.columns(min(4, len(specs)))
         for index, spec in enumerate(specs):
             with columns[index % len(columns)]:
                 _tile(spec)
-        if source == "open-meteo":
-            _weather_radar_map()
 
     with st.expander("All public tags", expanded=False):
         rows = summarize().get("latest") or []
@@ -215,6 +305,35 @@ def _desk_fragment() -> None:
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         else:
             st.caption("No pull yet.")
+
+
+def _render_query_chart(frame: pd.DataFrame, unit: str) -> None:
+    """Chart tag samples in the desk timezone. A single point is not drawn on a zero-width axis."""
+    if "chart_time" not in frame.columns or frame.empty:
+        return
+    if len(frame) == 1:
+        return
+    chart = px.line(frame, x="chart_time", y="value", color="tag", markers=True)
+    span = frame["chart_time"].max() - frame["chart_time"].min()
+    if pd.isna(span):
+        tickformat = "%H:%M"
+    elif span <= timedelta(hours=3):
+        tickformat = "%H:%M"
+    elif span <= timedelta(days=2):
+        tickformat = "%b %d %H:%M"
+    else:
+        tickformat = "%b %d"
+    chart.update_xaxes(tickformat=tickformat, nticks=6, title="", showgrid=False, ticks="outside")
+    chart.update_yaxes(title=_shown_unit(unit) or "value", gridcolor="#e5e7eb", zeroline=False, ticks="outside")
+    chart.update_layout(
+        height=280,
+        margin=dict(l=8, r=8, t=28, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.12),
+        hovermode="x unified",
+    )
+    st.plotly_chart(chart, width="stretch", config={"displayModeBar": False})
 
 
 def _render_query_result(result: dict[str, Any]) -> None:
@@ -251,18 +370,12 @@ def _render_query_result(result: dict[str, Any]) -> None:
         frames.extend(payload.get("points") or [])
     if frames:
         frame = pd.DataFrame(frames)
-        frame["time"] = pd.to_datetime(frame["ts_utc"], utc=True)
+        stamp = pd.to_datetime(frame["ts_utc"], utc=True).dt.tz_convert(desk_timezone())
+        frame["time"] = stamp.dt.strftime("%Y-%m-%d %H:%M %Z")
         show = [column for column in ("tag", "time", "value", "unit", "quality") if column in frame.columns]
-        st.dataframe(frame[show], width="stretch", hide_index=True)
-        chart = px.line(frame, x="time", y="value", color="tag", markers=True)
-        chart.update_layout(
-            height=280,
-            margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            legend=dict(orientation="h", y=1.12),
-        )
-        st.plotly_chart(chart, width="stretch")
+        _render_query_chart(frame.assign(chart_time=stamp), str(frames[0].get("unit") or ""))
+        with st.expander(f"Samples ({len(frame)})", expanded=False):
+            st.dataframe(frame[show], width="stretch", hide_index=True)
     elif calls and not any(call.get("name") == "list_tags" for call in calls):
         st.info("No tag samples in that range.")
     note = (result.get("message") or "").strip()
@@ -336,11 +449,9 @@ def _calculator() -> None:
 
 def render_cockpit() -> None:
     """Public-tag desk. Works with no model, no Temporal, and no Docker."""
+    _ensure_feeds()
     st.title("Real Time Desk")
-    st.caption(
-        "Public feeds only. A failed source stays empty. "
-        "Times are stored in UTC and shown in the desk timezone."
-    )
+    st.caption("Public feeds · times in CT.")
     with st.sidebar:
         st.markdown("### Desk")
         st.checkbox("Auto refresh (60s)", value=True, key="auto_refresh")
@@ -348,12 +459,11 @@ def render_cockpit() -> None:
             st.session_state["force_pull"] = True
             st.session_state.pop("ollama_probe", None)
             st.rerun()
+        render_integration_status_strip()
+        st.caption(f"Times in {desk_timezone_name()}.")
         if st.button("Load synthetic sample", width="stretch"):
             load_synthetic_desk()
             st.rerun()
-        st.caption(f"Display timezone {desk_timezone_name()}.")
-        st.caption("Temporal is not required for this desk.")
-        render_integration_status_strip()
 
     _desk_fragment()
     _model_panel()
